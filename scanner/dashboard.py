@@ -20,6 +20,8 @@ import json
 from collections import Counter
 from pathlib import Path
 
+import phases as PH
+
 SEVS = ["CRITICAL", "HIGH", "MEDIUM", "LOW"]
 COLORS = {"CRITICAL": "#7f1d1d", "HIGH": "#dc2626", "MEDIUM": "#f59e0b", "LOW": "#3b82f6"}
 
@@ -61,10 +63,29 @@ def snapshot(name, d):
         "overdue": sum(1 for f in blocking if f.get("overdue")),
         "new": (s.get("trend") or {}).get("new"), "fixed": (s.get("trend") or {}).get("fixed"),
         "compliance": {fw: dict(c) for fw, c in by_fw.items()},
+        "phases": PH.status(stages, _sel(s.get("phases")), bool(failed), bool(errors)),
         "top": [{"id": f["id"], "title": f.get("title", ""), "severity": f.get("severity"), "kev": bool(f.get("kev")),
                  "where": f.get("package") and f"{f['package']} {f.get('version', '')}" or f.get("location", ""),
                  "tools": f.get("tools") or [f.get("tool")]} for f in blocking[:5]],
     }
+
+
+def _sel(value):
+    try:
+        return PH.parse(value)
+    except ValueError:
+        return list(PH.PHASES)
+
+
+PH_COLOR = {"passed": "#16a34a", "failed": "#dc2626", "error": "#d97706", "report": "#4f46e5", "skipped": "#cbd5e1",
+            "notsel": "#e2e8f0", "elsewhere": "#94a3b8"}
+
+
+def lifecycle(st):
+    """Eight chips, Plan to Monitor, coloured by result; the title attribute names phase and result."""
+    return '<div class="lc">' + "".join(
+        f'<span title="{PH.TITLES[p]}: {esc(st.get(p, "skipped"))}" style="background:{PH_COLOR.get(st.get(p), "#cbd5e1")}">'
+        f'{PH.TITLES[p][0]}</span>' for p in PH.PHASES) + "</div>"
 
 
 def spark(points, w=110, h=26):
@@ -93,6 +114,8 @@ def bar(by_sev, w=120, h=9):
 
 
 CSS = """
+.lc { display: flex; gap: 2px; margin-top: 5px; } .lc span { width: 15px; height: 15px; border-radius: 3px; color: #fff;
+  font-size: 9px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; }
 :root { --bg:#f8fafc; --card:#fff; --ink:#0f172a; --muted:#64748b; --line:#e2e8f0; --head:#0b1220; }
 @media (prefers-color-scheme: dark) { :root { --bg:#0b1220; --card:#111827; --ink:#e2e8f0; --muted:#94a3b8; --line:#1f2937; } }
 * { box-sizing: border-box; } body { margin:0; background:var(--bg); color:var(--ink); font:14px/1.45 Inter, system-ui, sans-serif; }
@@ -145,14 +168,16 @@ def render(snaps, history, title):
             delta = f'<div class="small muted">{s["new"]} new · {s["fixed"]} fixed since last scan</div>'
         name = f'<a href="{esc(s["run_url"])}">{esc(s["repo"])}</a>' if s["run_url"] else esc(s["repo"])
         rows.append(f'<tr><td><b>{name}</b><div class="small muted mono">{esc(s["ref"])} {esc(s["sha"])}</div></td>'
-                    f'<td class="small">{esc(s["scanned"])}</td><td>{verdict}</td>'
+                    f'<td class="small">{esc(s["scanned"])}</td><td>{verdict}{lifecycle(s.get("phases") or {})}</td>'
                     f'<td>{s["gates_failed"]} / {s["gates_total"]}' + (f' <span class="small amber">+{s["errors"]} err</span>' if s["errors"] else "")
                     + f'</td><td><b>{s["blocking"]}</b><div>{bar(s["by_sev"])}</div><div>{sev}</div>{delta}</td>'
                     f'<td class="{"dark" if s["kev"] else ""}"><b>{s["kev"]}</b></td><td class="{"dark" if s["live"] else ""}">{s["live"]}</td>'
                     f'<td class="{"amber" if s["overdue"] else ""}">{s["overdue"]}</td><td>{spark(hist)}</td></tr>')
-    out.append('<h2>Repositories</h2><div class="wrap"><table><thead><tr><th>Repository</th><th>Last scan</th><th>Verdict</th>'
+    out.append('<h2>Repositories</h2><div class="wrap"><table><thead><tr><th>Repository</th><th>Last scan</th><th>Verdict · lifecycle</th>'
                '<th>Gates failed</th><th>Blocking</th><th>KEV</th><th>Live secrets</th><th>Overdue</th><th>Trend (blocking)</th>'
-               '</tr></thead><tbody>' + "".join(rows) + '</tbody></table></div>')
+               '</tr></thead><tbody>' + "".join(rows) + '</tbody></table></div>'
+               '<p class="small muted">Lifecycle: Plan · Code · Build · Test · Release · Deploy · Operate · Monitor. '
+               'Green passed, red failed, amber scanner error, grey run by a separate workflow or not selected.</p>')
     # compliance coverage
     fws = sorted({fw for s in snaps for fw in s["compliance"]})
     if fws:

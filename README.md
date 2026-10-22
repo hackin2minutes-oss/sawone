@@ -33,6 +33,14 @@ No configuration is needed. `.sawone.yml` changes defaults (`.sawone.example.yml
 
 ## The DevSecOps lifecycle
 
+Every stage belongs to one of the eight DevSecOps phases. Pipeline jobs are named by phase (`Code · secrets`,
+`Build · sca`, `Test · dast`), the report opens with a lifecycle overview (one box per phase with its result),
+groups its detailed results by phase, and the job summary / PR comment start with
+`DevSecOps lifecycle: ✅ Plan → ❌ Code → …`. Scan only some phases with `phases:` (input, `SCAN_PHASES`,
+`SAWONE_PHASES` on GitLab, `phases` parameter on Azure DevOps, or `phases:` in `.sawone.yml`), for example
+`phases: plan,code,build` for a fast pull-request check that does not build the image. Stages of phases
+that were not selected are listed as "not selected", never as passed.
+
 | Phase | What Sawone does | Where |
 |---|---|---|
 | **Plan** | threat model as code (pytm / Threagile): data-flow diagram, STRIDE, threats checked against scanner evidence, risk decisions; compliance evidence map | `threat-model` gate, report |
@@ -253,6 +261,7 @@ report, an invalid baseline or a missing KEV feed all show as **error** rows.
 | `fail-on-scanner-error` | `true` | |
 | `scan-depth` | `auto` | `auto` (PRs fast, else deep) · `fast` · `deep` |
 | `pr-gate` | `new` | `new` · `all` |
+| `phases` | `all` | DevSecOps phases to scan: `all` or a comma list of `plan`, `code`, `build`, `test`, `operate` (`release`, `deploy`, `monitor` are the other workflows) |
 | `incremental` | `auto` | `auto` (pull requests scan only the change) · `on` · `off` |
 | `report-languages` | `en,ar` | PDF languages: `en`, `ar` or both |
 | `baseline-file` | `.sawone-baseline.yml` | relative to `path` |

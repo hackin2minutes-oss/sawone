@@ -98,6 +98,24 @@ jobs:
       enable-cicd: false
       pr-gate: all
 
+  # Phase selection: plan and code only (no image build, no attacks), as a quick pull-request check would run.
+  consumer-phases:
+    name: consumer python-flask (phases plan,code)
+    needs: [lint, unit]
+    permissions:
+      contents: read
+      actions: read # code scanning upload (disabled here, but the workflow declares it)
+      security-events: write # same
+    uses: ./.github/workflows/sawone-scan.yml
+    with:
+      path: tests/fixtures/python-flask
+      artifact-prefix: consumer-python-flask-phases
+      scanner-source-path: scanner
+      phases: plan,code
+      enforce: false
+      upload-sarif: never
+      pr-gate: all
+
   # The same Terraform flaws, all accepted in .sawone-baseline.yml: the IaC gate must pass and say so.
   consumer-baselined:
     name: consumer terraform-aws (baselined)
@@ -140,7 +158,7 @@ jobs:
 
   assert:
     name: assert ${{ matrix.fixture }}
-    needs: [consumer-flask, consumer-terraform, consumer-baselined]
+    needs: [consumer-flask, consumer-terraform, consumer-baselined, consumer-phases]
     if: always()
     runs-on: ubuntu-24.04
     permissions: {}
@@ -152,6 +170,10 @@ jobs:
             expect_failed: "threat-model secrets sast sca container"
             expect_ran: "threat-model secrets sast sca container dast runtime"
             expect_threat_model: "true" # pytm model + a mitigation the scanners contradict
+          - fixture: python-flask-phases
+            expect_failed: "threat-model secrets sast"
+            expect_ran: "threat-model secrets sast"
+            expect_not_selected: "sca iac container dast runtime"
           - fixture: terraform-aws
             expect_failed: "iac"
             expect_ran: "iac"
@@ -170,6 +192,7 @@ jobs:
           EXPECT_RAN: ${{ matrix.expect_ran }}
           EXPECT_BASELINED: ${{ matrix.expect_baselined }}
           EXPECT_THREAT_MODEL: ${{ matrix.expect_threat_model }}
+          EXPECT_NOT_SELECTED: ${{ matrix.expect_not_selected }}
         run: |
           s=report/summary.json
           jq -r '.stages[] | "\(.stage)\t\(.tool)\t\(.status)\t\(.findings // .reason)"' "$s"
@@ -212,6 +235,14 @@ jobs:
           jq -e '.stages[] | select(.stage == "policy" and .tool == "Risk intelligence (KEV/EPSS)" and .status == "report")' "$s" > /dev/null \
             || { echo "::error::KEV/EPSS feeds were not loaded"; bad=1; }
           jq -e '.compliance | length > 20' "$s" > /dev/null || { echo "::error::compliance map missing"; bad=1; }
+          for stage in $EXPECT_NOT_SELECTED; do
+            jq -e --arg s "$stage" '[.stages[] | select(.stage == $s and .status == "skipped"
+                 and (.reason | test("phase not selected")))] | length > 0' "$s" > /dev/null \
+              || { echo "::error::$stage ran although its phase was not selected"; bad=1; }
+          done
+          if [ -n "$EXPECT_NOT_SELECTED" ]; then
+            jq -e '.phases == ["plan", "code"]' "$s" > /dev/null || { echo "::error::selected phases not recorded"; bad=1; }
+          fi
           if [ "$EXPECT_THREAT_MODEL" = true ]; then
             tm=report/threat-model.json
             jq -e '.total > 0 and (.by_stride | length == 6)' "$tm" > /dev/null || { echo "::error::threat model not analysed"; bad=1; }

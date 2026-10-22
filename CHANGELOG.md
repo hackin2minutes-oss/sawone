@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.2.0 — Phase-wise scans and reports
+
+- Every stage belongs to a DevSecOps phase: Plan (threat model), Code (secrets, SAST), Build (dependencies,
+  licences, IaC, Kubernetes, CI/CD), Test (image, DAST, IAST), Release (risk policy and the gate decision,
+  signing in sawone-release.yml), Deploy (sawone-release.yml), Operate (WAF proof), Monitor (sawone-monitor.yml,
+  DefectDojo).
+- Scan by phase: `phases` input (GitHub), `SAWONE_PHASES` (GitLab), `phases` parameter (Azure DevOps),
+  `SCAN_PHASES` / `phases:` in `.sawone.yml` (action, CLI). Unselected phases are reported as "not selected".
+- Pipeline jobs are named by phase (`Code · secrets`, `Build · sca`, `Test · dast`, `Operate · runtime`).
+  If branch protection requires the old job names (`gate secrets`…), update the required checks.
+- Report: a DevSecOps lifecycle overview in the executive summary (one box per phase: result and what blocks),
+  a phase column in Results by stage, phase tags in Security gate results, and Detailed results grouped by
+  phase with a short introduction to each (English and Arabic).
+- Job summary and PR comment open with the lifecycle line and list stages with their phase.
+- Dashboard: eight lifecycle chips per repository.
+- validate runs a `phases: plan,code` consumer and asserts that unselected phases are reported, not run.
+
 ## 1.1.1 — Fixes from the first full mywife report
 
 - Threats against external elements (a third-party site in the actors' trust boundary) are listed but no

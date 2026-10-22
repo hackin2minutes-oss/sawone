@@ -37,6 +37,7 @@ try:
     from report_i18n import AR
 except ImportError:  # pragma: no cover — report.py copied on its own
     AR = {}
+import phases as PH  # noqa: E402  (same directory as this script)
 
 LANG = "en"
 
@@ -67,9 +68,9 @@ SEV_LABEL = {"CRITICAL": "Critical", "HIGH": "High", "MEDIUM": "Medium", "LOW": 
 SEV_RANK = {s: i for i, s in enumerate(SEVS)}
 LEVEL_SEV = {"error": "HIGH", "warning": "MEDIUM", "note": "LOW", "none": "LOW"}
 STATUS_LABEL = {"passed": "Passed", "failed": "Failed", "error": "Scanner error", "skipped": "Skipped",
-                "report": "Report only", "success": "Passed", "failure": "Failed", "cancelled": "Cancelled"}
+                "report": "Report only", "notsel": "Not selected", "elsewhere": "Separate workflow", "success": "Passed", "failure": "Failed", "cancelled": "Cancelled"}
 STATUS_CLS = {"passed": "ok", "success": "ok", "failed": "bad", "failure": "bad", "error": "warn",
-              "cancelled": "warn", "skipped": "skip", "report": "info"}
+              "cancelled": "warn", "skipped": "skip", "report": "info", "notsel": "skip", "elsewhere": "neutral"}
 
 STAGE_INFO = {
     "policy": ("Risk policy",
@@ -329,6 +330,10 @@ class Data:
                 v.get("result"), v.get("result")), "gate": True, "findings": "", "reason": ""}
                 for k, v in json.loads(env["RESULTS"]).items()]
         self.stages = stages
+        try:
+            self.phases = PH.parse(self.summary.get("phases"))
+        except ValueError:
+            self.phases = list(PH.PHASES)
         self.enforce = s.get("enforce", True) is not False
         self.threshold = "/".join(s.get("severity") or ["HIGH", "CRITICAL"])
         self.release = s.get("release") or {}
@@ -718,6 +723,20 @@ PAGE_AR = r"""
 }
 """
 SLA_CSS = r"""
+table.lifecycle { table-layout: fixed; border-collapse: separate; border-spacing: 1.2mm 0; width: calc(100% + 2.4mm);
+  margin: 1mm -1.2mm 2mm -1.2mm; }
+table.lifecycle td { border: .6pt solid #e2e8f0; border-top: 1.2mm solid #94a3b8; border-radius: 1.2mm; padding: 2mm 1.4mm;
+  background: #f8fafc; vertical-align: top; text-align: center; }
+table.lifecycle td.ph-failed { border-top-color: #dc2626; } table.lifecycle td.ph-error { border-top-color: #d97706; }
+table.lifecycle td.ph-passed { border-top-color: #16a34a; } table.lifecycle td.ph-report { border-top-color: #4f46e5; }
+table.lifecycle td.ph-notsel, table.lifecycle td.ph-skipped { opacity: .65; }
+.ph-n { font-weight: 700; font-size: 8.4pt; margin-bottom: 1.2mm; } .ph-s { font-size: 6.4pt; color: #64748b; margin-top: 1.2mm; }
+table.lifecycle .pill { font-size: 6pt; padding: .2mm 1.2mm; white-space: normal; }
+.phase-name { font-weight: 700; font-size: 7.6pt; color: #334155; text-transform: uppercase; letter-spacing: .3pt; }
+.phase-tag { font-size: 6.4pt; font-weight: 700; color: #4f46e5; text-transform: uppercase; letter-spacing: .3pt; }
+.phase-band { margin: 5mm 0 1mm 0; padding: 1.6mm 3mm; background: #eef2ff; border-radius: 1.2mm; font-size: 7.8pt;
+  color: #3730a3; page-break-after: avoid; }
+.phase-band b { text-transform: uppercase; letter-spacing: .4pt; }
 .diagram { text-align: center; margin: 2mm 0 1mm 0; page-break-inside: avoid; }
 .diagram img { max-width: 100%; max-height: 120mm; }
 table.stride td { text-align: center; } table.stride td:first-child { text-align: inherit; }
@@ -845,8 +864,10 @@ class Report:
             out.append(note(line + "."))
 
         # results by stage
+        out.append(self.h2("DevSecOps lifecycle", "exec-phases"))
+        out.append(self.lifecycle(b))
         out.append(self.h2("Results by stage", "exec-stages"))
-        rows = []
+        rows, last_phase = [], None
         for st in DETAIL_STAGES:
             srows = [r for r in d.stages if r["stage"] == st]
             if not srows:
@@ -859,10 +880,13 @@ class Report:
             sb = [f for f in b if st in (f.get("stages") or [f.get("stage")])]
             sc = sev_counts(sb)
             tools = ", ".join(sorted({short_tool(r["tool"]) for r in srows if r.get("tool") and r["tool"] != "—"}))
-            rows.append([f"<b>{esc(stage_title(st))}</b><br/><span class='small muted'>{esc(tools)}</span>",
+            ph = PH.phase_of(st)
+            rows.append([f'<span class="phase-name">{esc(T(PH.TITLES[ph]))}</span>' if ph != last_phase else "",
+                         f"<b>{esc(stage_title(st))}</b><br/><span class='small muted'>{esc(tools)}</span>",
                          status_pill(status), str(len(sb)) if sb else "—", bar_svg(sc, 120) + "<br/>" + sev_strip(sc) if sb else ""])
-        out.append(table(["Stage", "Result", "Blocking", "Severity of blocking findings"], rows, "",
-                         ["40%", "14%", "10%", "36%"]))
+            last_phase = ph
+        out.append(table(["Phase", "Stage", "Result", "Blocking", "Severity of blocking findings"], rows, "phased",
+                         ["11%", "34%", "13%", "9%", "33%"]))
 
         # top risks
         top = [f for f in b][:8]
@@ -884,6 +908,31 @@ class Report:
             out.append(note(T("P1: fix before release · P2: fix in the current cycle · P3: schedule. Derived "
                               "automatically from the gate results; adjust to your risk appetite.")))
         return "".join(out)
+
+    def lifecycle(self, blocking):
+        """Eight boxes, one per DevSecOps phase: its result and what blocks in it."""
+        d = self.d
+        failed = any(r["status"] == "failed" and r.get("gate", True) for r in d.stages)
+        err = any(r["status"] == "error" for r in d.stages)
+        st = PH.status(d.stages, d.phases, failed, err)
+        cells = []
+        for ph in PH.PHASES:
+            n = sum(1 for f in blocking if any(PH.phase_of(s) == ph for s in (f.get("stages") or [f.get("stage")])))
+            if st[ph] == "elsewhere":
+                sub = T("by {w}", w=PH.ELSEWHERE[ph].split(" ")[0])
+            elif st[ph] == "notsel":
+                sub = T("not in this run")
+            elif ph == "release":
+                sub = (T("release blocked") if self.d.summary.get("enforce", True) else T("would block release")) \
+                    if st[ph] in ("failed", "error") else T("release allowed")
+            else:
+                sub = (T("{n} blocking", n=n) if n else
+                       T("check failed") if st[ph] in ("failed", "error") else T("nothing blocking"))
+            cells.append(f'<td class="ph ph-{st[ph]}"><div class="ph-n">{esc(T(PH.TITLES[ph]))}</div>'
+                         f'{status_pill(st[ph])}<div class="ph-s">{esc(sub)}</div></td>')
+        legend = T("Plan, code, build and test run in this scan; release is the gate decision; deploy and monitor "
+                   "run in their own workflows; operate is the WAF test.")
+        return f'<table class="lifecycle"><tr>{"".join(cells)}</tr></table>' + note(esc(legend))
 
     def actions(self):
         d, acts = self.d, []
@@ -1049,7 +1098,9 @@ class Report:
             tool = r.get("tool") or "—"
             label = tool[tool.index("(") + 1:-1] if tool.startswith(("Trivy image (", "Grype (")) else ""
             tcell = f'<b>{esc(short_tool(tool))}</b>' + (f'<br/><span class="mono small muted">{esc(label)}</span>' if label else "")
-            rows.append((r["status"], [esc(stage_title(r["stage"])), tcell,
+            ptag = (f'<span class="phase-tag">{esc(T(PH.TITLES[PH.phase_of(r["stage"])]))}</span><br/>'
+                    if r["stage"] in PH.STAGE_PHASE else "")
+            rows.append((r["status"], [ptag + esc(stage_title(r["stage"])), tcell,
                                        status_pill(r["status"] if r.get("gate", True) or r["status"] != "failed" else "report"),
                                        detail]))
         body = "".join(f'<tr class="{"row-fail" if s == "failed" else "row-err" if s == "error" else ""}">'
@@ -1157,7 +1208,11 @@ class Report:
             srows = [r for r in d.stages if r["stage"] == st]
             if not srows:
                 continue
-            out.append(self.h2(stage_title(st), f"st-{st}", raw=True))
+            ph = PH.phase_of(st)
+            if ph != getattr(self, "_detail_phase", None):
+                self._detail_phase = ph
+                out.append(f'<div class="phase-band"><b>{esc(T(PH.TITLES[ph]))}</b> · {esc(T(PH.INTROS[ph]))}</div>')
+            out.append(self.h2(f"{T(PH.TITLES[ph])} · {stage_title(st)}", f"st-{st}", raw=True))
             out.append(f'<p class="lead">{esc(stage_intro(st))}</p>')
             if all(r["status"] == "skipped" for r in srows):
                 out.append(callout(T("Not run: {why}", why=esc("; ".join(r.get("reason") or "" for r in srows))), "info"))

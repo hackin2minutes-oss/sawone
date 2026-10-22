@@ -35,6 +35,9 @@ inputs:
   epss-threshold:
     description: Also block CVEs with an EPSS score at or above this (0-1; 0 = off)
     default: "0"
+  phases:
+    description: "DevSecOps phases to scan: all, or a comma list of plan, code, build, test, operate"
+    default: "all"
   skip:
     description: Comma-separated tools to skip, e.g. "nuclei,checkov"
     default: ""
@@ -77,6 +80,7 @@ runs:
         SCAN_ENFORCE: ${{ inputs.enforce }}
         SCAN_DAST: ${{ inputs.dast }}
         SCAN_SKIP: ${{ inputs.skip }}
+        SCAN_PHASES: ${{ inputs.phases }}
         SCAN_BASELINE: ${{ inputs.baseline-file }}
         SCAN_BLOCK_KEV: ${{ inputs.block-kev }}
         SCAN_EPSS_THRESHOLD: ${{ inputs.epss-threshold }}
@@ -90,7 +94,7 @@ runs:
         docker run --rm \
           -v /var/run/docker.sock:/var/run/docker.sock \
           -v "$target:$target" -w "$target" \
-          -e SCAN_CONFIG -e SCAN_SEVERITY -e SCAN_ENFORCE -e SCAN_DAST -e SCAN_SKIP -e SCAN_BASELINE -e SCAN_BLOCK_KEV -e SCAN_EPSS_THRESHOLD \
+          -e SCAN_CONFIG -e SCAN_SEVERITY -e SCAN_ENFORCE -e SCAN_DAST -e SCAN_SKIP -e SCAN_PHASES -e SCAN_BASELINE -e SCAN_BLOCK_KEV -e SCAN_EPSS_THRESHOLD \
           -e DEFECTDOJO_URL -e DEFECTDOJO_TOKEN -e GH_TOKEN \
           -e DEFECTDOJO_PRODUCT="$GITHUB_REPOSITORY" -e DEFECTDOJO_ENGAGEMENT="$GITHUB_REF_NAME" \
           -e REPO="$GITHUB_REPOSITORY" -e SHA="$GITHUB_SHA" -e REF="$GITHUB_REF" \

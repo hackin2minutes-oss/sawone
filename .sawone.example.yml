@@ -78,3 +78,4 @@ sla:                          # days to fix, counted from the date a finding was
 compliance:
   frameworks: [asvs, ssdf, ecc, cscc, ccc, sama, pdpl]   # evidence map; drop the ones you do not report against
 
+phases: [plan, code, build, test, operate]   # DevSecOps phases to scan (default: all)

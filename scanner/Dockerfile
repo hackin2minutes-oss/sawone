@@ -25,7 +25,7 @@ RUN apt-get update \
 RUN pip install --no-cache-dir pyyaml weasyprint semgrep zizmor pytm \
     && git config --system --add safe.directory '*'
 
-COPY sawone_scan.py findings.py report.py report_i18n.py merge_reports.py dashboard.py threatmodel.py /opt/sawone/
+COPY sawone_scan.py findings.py phases.py report.py report_i18n.py merge_reports.py dashboard.py threatmodel.py /opt/sawone/
 # defaults/ may include tools.lock.json, written by release.yml: the tool versions certified
 # with this scanner release (used when SCAN_TOOLS_LOCK=bundled)
 COPY defaults/ /opt/sawone/defaults/

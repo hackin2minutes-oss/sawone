@@ -34,6 +34,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import findings as F
+import phases as PH  # noqa: E402
 import threatmodel as TMA  # noqa: E402
 
 try:
@@ -1549,7 +1550,8 @@ class Scan:
         summary = {"repository": os.environ.get("REPO") or self.ws.name, "enforce": self.cfg.get("enforce", True),
                    "severity": self.sev, "stages": self.stages, "inventory": getattr(self, "inv", {}),
                    "tools": self.tool_versions, "image": self.prebuilt, "options": self.report_options(),
-                   "only": sorted(self.only), "generated": dt.datetime.now(dt.timezone.utc).isoformat()}
+                   "only": sorted(self.only), "generated": dt.datetime.now(dt.timezone.utc).isoformat(),
+                   "phases": _phases_or_all(self.cfg.get("phases"))}
         return render_outputs(self.reports, summary)
 
     # ========================================================== main flow
@@ -1576,8 +1578,17 @@ class Scan:
             except Exception as e:  # noqa: BLE001 — the policy must never take the scan down silently
                 self.record("policy", "risk policy", "error", f"{type(e).__name__}: {e}")
             if self.update_tools():
+                try:
+                    selected = PH.parse(self.cfg.get("phases"))
+                except ValueError as e:      # a typo in the config: say so, and scan everything rather than nothing
+                    self.record("scanner", "config", "error", f"phases: {e}")
+                    selected = list(PH.PHASES)
                 for stage, step in steps:
                     if not self.wants(stage):
+                        continue
+                    if PH.phase_of(stage) not in selected:
+                        self.record(stage, "—", "skipped", f"{PH.TITLES[PH.phase_of(stage)]} phase not selected "
+                                    f"(phases: {','.join(selected)})", gate=False)
                         continue
                     try:
                         step()
@@ -1776,6 +1787,13 @@ def write_manifest(reports):
     (reports / "evidence" / "manifest.sha256").write_text("\n".join(lines) + "\n")
 
 
+def _phases_or_all(value):
+    try:
+        return PH.parse(value)
+    except ValueError:
+        return list(PH.PHASES)
+
+
 def threat_analysis(reports, merged):
     """STRIDE, scanner evidence and decisions for the pytm model of this run (threat-model.json, diagrams)."""
     reports = Path(reports)
@@ -1832,6 +1850,14 @@ def render_outputs(reports, summary):
               "❌ " + ", ".join(x for x in [f"{len(failed)} gate(s) failed" if failed else "",
                                             f"{len(errors)} scanner error(s)" if errors else ""] if x))
     md = ["## Sawone scan", "", f"**Result:** {result}" + ("" if enforce else " _(report-only mode)_"), ""]
+    try:
+        sel = PH.parse(summary.get("phases"))
+    except ValueError:
+        sel = list(PH.PHASES)
+    pst = PH.status(stages, sel, bool(failed), bool(errors))
+    picon = {"passed": "✅", "failed": "❌", "error": "⚠️", "report": "ℹ️", "skipped": "➖", "notsel": "⏸️",
+             "elsewhere": "↗️"}
+    md += ["**DevSecOps lifecycle:** " + " → ".join(f"{picon[pst[p]]} {PH.TITLES[p]}" for p in PH.PHASES), ""]
     if inv:
         iac = [k for k in ["dockerfiles", "terraform", "kubernetes", "helm_charts", "cloudformation", "bicep_arm", "compose"] if inv.get(k)]
         md += [f"**Detected:** languages: {', '.join(inv.get('languages') or {}) or '—'} · "
@@ -1840,9 +1866,10 @@ def render_outputs(reports, summary):
     rel = summary.get("release")
     if rel:
         md += ["**Release:** " + " · ".join(f"{k}: {v}" for k, v in rel.items()), ""]
-    md += ["| Stage | Tool | Result | Details |", "|---|---|---|---|"]
+    md += ["| Phase | Stage | Tool | Result | Details |", "|---|---|---|---|---|"]
     for s in stages:
-        md.append(f"| {s['stage']} | {s['tool']} | {ICON.get(s['status'], s['status'])} {s['status']} | "
+        ph = PH.TITLES[PH.phase_of(s["stage"])] if s["stage"] in PH.STAGE_PHASE else ""
+        md.append(f"| {ph} | {s['stage']} | {s['tool']} | {ICON.get(s['status'], s['status'])} {s['status']} | "
                   f"{(s.get('findings') or s.get('reason') or '').replace('|', '/')} |")
     opts = summary.get("options") or {}
     fs, merged = findings_summary(reports, set(summary["pr"]["base_fingerprints"])
@@ -2065,6 +2092,11 @@ def main():
         if bad:
             sys.exit(f"ERROR: unknown stage(s) in SCAN_ONLY: {', '.join(bad)} (valid: {', '.join(STAGES)})")
         user_cfg["only"] = only
+    if env.get("SCAN_PHASES"):
+        try:
+            user_cfg["phases"] = PH.parse(env["SCAN_PHASES"])
+        except ValueError as e:
+            sys.exit(f"ERROR: SCAN_PHASES: {e}")
     if env.get("SCAN_IMAGE"):
         user_cfg["image"] = env["SCAN_IMAGE"]
     if env.get("SCAN_APP_PORT"):

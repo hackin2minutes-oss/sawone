@@ -216,7 +216,7 @@ def test_build_writes_analysis_and_report_chapter(tmp_path):
     assert "STRIDE per element" in en and "Threats with scanner evidence (1)" in en and "Gaps in the model" not in en
     assert "Confirmed" in en and "Partner site" in en
     ar = report.build(r, "ar")
-    assert "STRIDE لكل عنصر" in ar and "قرارات المخاطر" not in ar and "تهديدات نظرية" in ar
+    assert "STRIDE لكل عنصر" in ar and ">قرارات المخاطر<" not in ar and "تهديدات نظرية" in ar
 
 
 def test_a_contradicted_mitigation_fails_the_gate_once_the_evidence_is_in(tmp_path):

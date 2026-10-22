@@ -468,3 +468,35 @@ AR.update({
     "Threats against external elements ({els}) are listed for awareness but never block: you cannot fix a third party's system. Protect the data flows to them instead.":
         "التهديدات على العناصر الخارجية ({els}) مدرجة للاطلاع ولا تمنع أبداً، إذ لا يمكنك إصلاح نظام طرف ثالث. احمِ تدفقات البيانات إليها بدلاً من ذلك.",
 })
+
+# DevSecOps phases (Sawone 1.2)
+AR.update({
+    "DevSecOps lifecycle": "دورة حياة DevSecOps", "Phase": "المرحلة",
+    "Plan": "التخطيط", "Code": "البرمجة", "Build": "البناء", "Test": "الاختبار", "Release": "الإصدار",
+    "Deploy": "النشر", "Operate": "التشغيل", "Monitor": "المراقبة",
+    "Not selected": "غير محددة", "Separate workflow": "سير عمل مستقل",
+    "by {w}": "عبر {w}", "not in this run": "ليست ضمن هذا التشغيل", "nothing blocking": "لا شيء مانع",
+    "{n} blocking": "{n} مانعة", "release allowed": "الإصدار مسموح", "release blocked": "الإصدار ممنوع",
+    "would block release": "ستمنع الإصدار",
+    "Plan, code, build and test run in this scan; release is the gate decision; deploy and monitor run in their own workflows; operate is the WAF test.":
+        "تُنفَّذ مراحل التخطيط والبرمجة والبناء والاختبار في هذا الفحص؛ والإصدار هو قرار البوابة؛ ويجري النشر والمراقبة في سير عمل "
+        "خاص بكل منهما؛ والتشغيل هو اختبار جدار حماية تطبيقات الويب.",
+    "Design-time security: the threat model and the risk decisions taken on it.":
+        "الأمن في مرحلة التصميم: نموذج التهديدات وقرارات المخاطر المتخذة بشأنه.",
+    "The source code and its history: secrets and code-level flaws, found before anything is built.":
+        "الشيفرة المصدرية وتاريخها: الأسرار والثغرات على مستوى الشيفرة، تُكتشف قبل بناء أي شيء.",
+    "What the build pulls in and produces: dependencies and their licences, infrastructure as code, Kubernetes manifests and the CI/CD pipeline itself.":
+        "ما يجلبه البناء وما ينتجه: الاعتماديات وتراخيصها، والبنية التحتية كشيفرة، وملفات Kubernetes، وخط CI/CD نفسه.",
+    "The built artefact under test: the container image, and the running application attacked from outside.":
+        "المنتج المبني قيد الاختبار: صورة الحاوية، والتطبيق العامل وهو يتعرض للهجوم من الخارج.",
+    "The release decision: risk policy (known-exploited and likely-exploited vulnerabilities, accepted risks) and, in sawone-release.yml, signing, SBOM attestation and provenance.":
+        "قرار الإصدار: سياسة المخاطر (الثغرات المستغلة فعلياً والمرجّح استغلالها، والمخاطر المقبولة)، ثم في sawone-release.yml "
+        "التوقيع وإثبات قائمة مكونات البرمجيات ومصدر البناء.",
+    "Deployment only after every gate passed, the signature and attestation verify and a human approved (sawone-release.yml).":
+        "النشر فقط بعد اجتياز كل البوابات والتحقق من التوقيع والإثبات وموافقة بشرية (sawone-release.yml).",
+    "Protection in production: a web application firewall proven to block attacks on this application.":
+        "الحماية في بيئة الإنتاج: جدار حماية لتطبيقات الويب ثبت أنه يمنع الهجمات على هذا التطبيق.",
+    "After release: vulnerability tracking, and daily rescans of the images actually running (sawone-monitor.yml).":
+        "بعد الإصدار: تتبّع الثغرات، وإعادة فحص يومية للصور العاملة فعلياً (sawone-monitor.yml).",
+})
+AR.update({"check failed": "فشل الفحص"})

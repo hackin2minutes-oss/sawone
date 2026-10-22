@@ -177,6 +177,10 @@ on:
         description: "auto (pull requests skip stages the change cannot affect, and secret/code scans look only at the change), on or off"
         type: string
         default: auto
+      phases:
+        description: "DevSecOps phases to scan: all, or a comma list of plan, code, build, test, operate (e.g. plan,code,build for a quick check without building the image). release, deploy and monitor are sawone-release.yml and sawone-monitor.yml"
+        type: string
+        default: all
       report-languages:
         description: "PDF report languages: en, ar or en,ar"
         type: string
@@ -256,6 +260,7 @@ jobs:
       depth: ${{ steps.plan.outputs.depth }}
       unchanged-stages: ${{ steps.plan.outputs.unchanged-stages }}
       base-sha: ${{ steps.plan.outputs.base-sha }}
+      phases: ${{ steps.plan.outputs.phases }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -299,6 +304,7 @@ jobs:
           IN_EPSS: ${{ inputs.epss-threshold }}
           IN_INCREMENTAL: ${{ inputs.incremental }}
           IN_LANGS: ${{ inputs.report-languages }}
+          IN_PHASES: ${{ inputs.phases }}
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           EVENT: ${{ github.event_name }}
         run: |
@@ -344,6 +350,21 @@ jobs:
           context="$IN_CONTEXT"
           if [ -n "$dockerfile" ] && [ -z "$context" ]; then context="$(dirname "$dockerfile")"; fi
           if [ -n "$context" ]; then inside "$context" && [ -d "$ws/$context" ] || fail "build-context '$context' is not a directory in the repository"; fi
+          # DevSecOps phases: a stage runs only if its phase is selected (and its own enable-* input is on)
+          phases="$(echo "${IN_PHASES:-all}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+          [ -z "$phases" ] || [ "$phases" = all ] && phases="plan,code,build,test,release,deploy,operate,monitor"
+          for ph in ${phases//,/ }; do
+            case "$ph" in plan|code|build|test|release|deploy|operate|monitor) ;; *) fail "phases: unknown phase '$ph' (plan, code, build, test, release, deploy, operate, monitor)";; esac
+          done
+          sel() { [[ ",$phases," == *",$1,"* ]]; }
+          sel plan || EN_THREAT=false
+          sel code || { EN_SECRETS=false; EN_SAST=false; }
+          sel build || { EN_SCA=false; EN_IAC=false; EN_K8S=false; EN_CICD=false; }
+          sel test || { EN_CONTAINER=false; EN_DAST=false; IN_IAST=false; }
+          sel operate || EN_RUNTIME=false
+          if sel operate && ! sel test && [ "$EN_RUNTIME" = true ]; then
+            echo "::warning title=sawone::the operate phase (WAF test) needs the test phase, which builds the image; it will not run"
+          fi
           has_image=false
           if [ -n "$dockerfile" ] && [ "$EN_CONTAINER" = true ]; then has_image=true; fi
 
@@ -432,10 +453,12 @@ jobs:
             echo "depth=$depth"
             echo "full-scan=$full"
             echo "unchanged-stages=$(IFS=,; echo "${unchanged[*]}")"
+            echo "phases=$phases"
             echo "base-sha=$base_sha"
           } >> "$GITHUB_OUTPUT"
           {
             echo "### Sawone plan"
+            echo "- phases: ${phases//,/ · }"
             echo "- gates: ${gates[*]:-none}"
             echo "- image: ${dockerfile:-none} (build $has_image)"
             echo "- attacks: ${attack[*]:-none} (depth: $depth, ZAP active scan: $full)"
@@ -572,7 +595,7 @@ jobs:
           if-no-files-found: error
 
   gates:
-    name: gate ${{ matrix.stage }}
+    name: ${{ fromJSON('{"threat-model":"Plan","secrets":"Code","sast":"Code","sca":"Build","iac":"Build","kubernetes":"Build","cicd":"Build","dast":"Test","iast":"Test","runtime":"Operate"}')[matrix.stage] }} · ${{ matrix.stage }}
     needs: [validate, tools]
     if: needs.validate.outputs.gate-stages != '[]'
     runs-on: ${{ inputs.runs-on }}
@@ -654,7 +677,7 @@ jobs:
           esac
 
   build:
-    name: build + container gate
+    name: Build · image + Test · container
     needs: [validate, tools]
     if: needs.validate.outputs.has-image == 'true'
     runs-on: ${{ inputs.runs-on }}
@@ -750,7 +773,7 @@ jobs:
           esac
 
   attack:
-    name: attack ${{ matrix.stage }}
+    name: ${{ fromJSON('{"threat-model":"Plan","secrets":"Code","sast":"Code","sca":"Build","iac":"Build","kubernetes":"Build","cicd":"Build","dast":"Test","iast":"Test","runtime":"Operate"}')[matrix.stage] }} · ${{ matrix.stage }}
     needs: [validate, tools, build]
     # attack the image even when its container gate failed: the report should show everything
     if: >-
@@ -919,6 +942,7 @@ jobs:
           BASE_FINDINGS: ${{ steps.base.outputs.file }}
           PREV_FINDINGS: ${{ steps.base.outputs.previous }}
           UNCHANGED: ${{ needs.validate.outputs.unchanged-stages }}
+          PHASES: ${{ needs.validate.outputs.phases }}
           LANGS: ${{ inputs.report-languages }}
           IS_PR: ${{ github.event_name == 'pull_request' || github.event_name == 'pull_request_target' }}
           PR_GATE: ${{ inputs.pr-gate }}
@@ -950,7 +974,7 @@ jobs:
             > "$out/release.json"
           srcs=()
           for d in "$parts"/*/; do [ -d "$d" ] && srcs+=("${d%/}"); done
-          pr_args=(--languages "$LANGS" --unchanged "$UNCHANGED")
+          pr_args=(--languages "$LANGS" --unchanged "$UNCHANGED" --phases "$PHASES")
           [ -n "$PREV_FINDINGS" ] && pr_args+=(--previous-findings "$PREV_FINDINGS")
           if [ "$IS_PR" = true ]; then
             pr_args+=(--pr-gate "$PR_GATE")

@@ -7,7 +7,8 @@
 #   stages: [sawone-plan, sawone-scan, sawone-attack, sawone-report]
 #
 # CI/CD variables (all optional): SCAN_SEVERITY, SCAN_ENFORCE (default true), SCAN_BASELINE, SCAN_BLOCK_KEV,
-# SCAN_EPSS_THRESHOLD, SCAN_SKIP, SAWONE_REPORT_LANGUAGES (default en,ar), SCAN_APP_PORT, SCAN_HEALTH_PATH,
+# SCAN_EPSS_THRESHOLD, SCAN_SKIP, SAWONE_REPORT_LANGUAGES (default en,ar), SAWONE_PHASES (default all; or a
+# comma list of plan, code, build, test, operate), SCAN_APP_PORT, SCAN_HEALTH_PATH,
 # DAST_AUTH_VALUE / DAST_USERNAME / DAST_PASSWORD (masked; authenticated DAST),
 # SAWONE_GITLAB_TOKEN (masked; project access token with api scope — enables the merge-request comment).
 #
@@ -19,6 +20,7 @@
 variables:
   SAWONE_IMAGE: ghcr.io/hackin2minutes-oss/sawone-scanner:1
   SAWONE_REPORT_LANGUAGES: "en,ar"
+  SAWONE_PHASES: "all"   # DevSecOps phases to scan: all, or e.g. "plan,code,build" (no image build)
   GIT_DEPTH: "0"   # secret scanners read the history; incremental scans need the base commit
 
 .sawone:
@@ -34,7 +36,7 @@ variables:
       docker run --rm -v /var/run/docker.sock:/var/run/docker.sock
       -v "$CI_PROJECT_DIR:$CI_PROJECT_DIR" -w "$CI_PROJECT_DIR"
       -e SCAN_ONLY -e SCAN_SEVERITY -e SCAN_ENFORCE -e SCAN_SKIP -e SCAN_BASELINE -e SCAN_BLOCK_KEV -e SCAN_EPSS_THRESHOLD
-      -e SCAN_APP_PORT -e SCAN_HEALTH_PATH -e SCAN_BASE_SHA -e SCAN_DAST_FULL
+      -e SCAN_APP_PORT -e SCAN_HEALTH_PATH -e SCAN_BASE_SHA -e SCAN_DAST_FULL -e SCAN_PHASES="$SAWONE_PHASES"
       -e DAST_AUTH_VALUE -e DAST_USERNAME -e DAST_PASSWORD
       -e SCAN_TOOLS_LOCK="$SAWONE_TOOLS/tools.lock.json" -e SCAN_INTEL_DIR="$SAWONE_TOOLS/intel"
       -e REPO="$CI_PROJECT_PATH" -e SHA="$CI_COMMIT_SHA" -e REF="$CI_COMMIT_REF_NAME" -e RUN_URL="$CI_PIPELINE_URL"
@@ -68,6 +70,8 @@ sawone-secrets:
   extends: .sawone-gate
   variables: { SCAN_ONLY: secrets }
   rules:
+    - if: $SAWONE_PHASES !~ /(^|,) *(all|code) *(,|$)/i   # code phase not selected
+      when: never
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
       variables: { SCAN_ONLY: secrets, SCAN_BASE_SHA: $CI_MERGE_REQUEST_DIFF_BASE_SHA }
     - when: on_success
@@ -76,6 +80,8 @@ sawone-sast:
   extends: .sawone-gate
   variables: { SCAN_ONLY: sast }
   rules:
+    - if: $SAWONE_PHASES !~ /(^|,) *(all|code) *(,|$)/i   # code phase not selected
+      when: never
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
       variables: { SCAN_ONLY: sast, SCAN_BASE_SHA: $CI_MERGE_REQUEST_DIFF_BASE_SHA }
     - when: on_success
@@ -84,6 +90,8 @@ sawone-threat-model:
   extends: .sawone-gate
   variables: { SCAN_ONLY: threat-model }
   rules:   # incremental merge requests: only when the model changed
+    - if: $SAWONE_PHASES !~ /(^|,) *(all|plan) *(,|$)/i   # plan phase not selected
+      when: never
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
       changes: ["**/threatmodel/**", "**/threagile.y*ml"]
     - if: $CI_PIPELINE_SOURCE != "merge_request_event"
@@ -92,6 +100,8 @@ sawone-sca:
   extends: .sawone-gate
   variables: { SCAN_ONLY: sca }
   rules:
+    - if: $SAWONE_PHASES !~ /(^|,) *(all|build) *(,|$)/i   # build phase not selected
+      when: never
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
       changes: ["**/requirements*.txt", "**/Pipfile*", "**/poetry.lock", "**/pyproject.toml", "**/uv.lock", "**/package*.json",
                 "**/yarn.lock", "**/pnpm-lock.yaml", "**/pom.xml", "**/build.gradle*", "**/go.mod", "**/go.sum", "**/Gemfile*",
@@ -102,6 +112,8 @@ sawone-iac:
   extends: .sawone-gate
   variables: { SCAN_ONLY: iac }
   rules:
+    - if: $SAWONE_PHASES !~ /(^|,) *(all|build) *(,|$)/i   # build phase not selected
+      when: never
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
       changes: ["**/*.tf", "**/*.tfvars", "**/*.hcl", "**/*.bicep", "**/*.json", "**/*.y*ml", "**/*Dockerfile*", "**/Containerfile"]
     - if: $CI_PIPELINE_SOURCE != "merge_request_event"
@@ -110,6 +122,8 @@ sawone-kubernetes:
   extends: .sawone-gate
   variables: { SCAN_ONLY: kubernetes }
   rules:
+    - if: $SAWONE_PHASES !~ /(^|,) *(all|build) *(,|$)/i   # build phase not selected
+      when: never
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
       changes: ["**/*.y*ml", "**/*.tpl", "**/Chart.*"]
     - if: $CI_PIPELINE_SOURCE != "merge_request_event"
@@ -118,6 +132,8 @@ sawone-cicd:
   extends: .sawone-gate
   variables: { SCAN_ONLY: cicd }
   rules:
+    - if: $SAWONE_PHASES !~ /(^|,) *(all|build) *(,|$)/i   # build phase not selected
+      when: never
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
       changes: [".gitlab-ci.yml", ".github/**/*", "**/action.y*ml"]
     - if: $CI_PIPELINE_SOURCE != "merge_request_event"
@@ -131,6 +147,8 @@ sawone-image-and-attacks:
   variables:
     SCAN_ONLY: container,dast,runtime
   rules:
+    - if: $SAWONE_PHASES !~ /(^|,) *(all|test|operate) *(,|$)/i   # test / operate phases not selected
+      when: never
     - exists: ["**/Dockerfile", "Dockerfile"]
   timeout: 2h
 
@@ -160,7 +178,7 @@ sawone-report:
       "$CI_API_V4_URL/projects/$CI_PROJECT_ID/jobs/artifacts/$prev_ref/download?job=sawone-report"
       && unzip -q -o -j prev/r.zip 'sawone-reports/findings.json' 'sawone-reports/findings-consolidated.json' -d prev
       || echo "no earlier report on $prev_ref"
-    - args="--languages $SAWONE_REPORT_LANGUAGES"
+    - args="--languages $SAWONE_REPORT_LANGUAGES --phases $SAWONE_PHASES"
     - '[ -f prev/findings-consolidated.json ] && args="$args --previous-findings $CI_PROJECT_DIR/prev/findings-consolidated.json"'
     - '[ "$CI_PIPELINE_SOURCE" = merge_request_event ] && args="$args --pr-gate new" && [ -f prev/findings.json ] && args="$args --base-findings $CI_PROJECT_DIR/prev/findings.json"'
     - parts="$(ls -d "$CI_PROJECT_DIR"/sawone-part-*/ 2>/dev/null | tr '\n' ' ')"

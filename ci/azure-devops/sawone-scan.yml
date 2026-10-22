@@ -30,6 +30,9 @@ parameters:
   - name: reportLanguages
     type: string
     default: "en,ar"
+  - name: phases
+    type: string
+    default: all   # or a comma list of plan, code, build, test, operate
   - name: gates
     type: object
     default: [threat-model, secrets, sast, sca, iac, kubernetes, cicd]
@@ -63,6 +66,8 @@ stages:
     pool: ${{ parameters.pool }}
     jobs:
       - ${{ each g in parameters.gates }}:
+        # a gate runs only when its DevSecOps phase is selected
+        - ${{ if or(contains(parameters.phases, 'all'), and(eq(g, 'threat-model'), contains(parameters.phases, 'plan')), and(in(g, 'secrets', 'sast'), contains(parameters.phases, 'code')), and(in(g, 'sca', 'iac', 'kubernetes', 'cicd'), contains(parameters.phases, 'build'))) }}:
           - job: gate_${{ replace(g, '-', '_') }}
             displayName: gate ${{ g }}
             steps:
@@ -93,7 +98,7 @@ stages:
               - publish: $(Build.SourcesDirectory)/sawone-part-${{ g }}
                 artifact: sawone-part-${{ g }}
                 condition: always()
-      - ${{ if eq(parameters.attack, true) }}:
+      - ${{ if and(eq(parameters.attack, true), or(contains(parameters.phases, 'all'), contains(parameters.phases, 'test'), contains(parameters.phases, 'operate'))) }}:
           - job: image_and_attacks
             displayName: image + attacks (container, DAST, WAF)
             timeoutInMinutes: 120
@@ -107,7 +112,7 @@ stages:
                   tools="$(Pipeline.Workspace)/sawone-tools"
                   docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
                     -v "$(Build.SourcesDirectory):$(Build.SourcesDirectory)" -w "$(Build.SourcesDirectory)" -v "$tools:$tools:ro" \
-                    -e SCAN_ONLY=container,dast,runtime -e SCAN_ENFORCE="${{ parameters.enforce }}" -e SCAN_SEVERITY="${{ parameters.severity }}" \
+                    -e SCAN_ONLY=container,dast,runtime -e SCAN_PHASES="${{ parameters.phases }}" -e SCAN_ENFORCE="${{ parameters.enforce }}" -e SCAN_SEVERITY="${{ parameters.severity }}" \
                     -e SCAN_SKIP -e SCAN_BASELINE -e SCAN_BLOCK_KEV -e SCAN_EPSS_THRESHOLD -e SCAN_APP_PORT -e SCAN_HEALTH_PATH \
                     -e DAST_AUTH_VALUE -e DAST_USERNAME -e DAST_PASSWORD \
                     -e SCAN_TOOLS_LOCK="$tools/tools.lock.json" -e SCAN_INTEL_DIR="$tools/intel" \
@@ -155,7 +160,7 @@ stages:
           - bash: |
               set +e
               out="$(Pipeline.Workspace)/sawone-reports"
-              args="--languages ${{ parameters.reportLanguages }}"
+              args="--languages ${{ parameters.reportLanguages }} --phases ${{ parameters.phases }}"
               prev="$(Pipeline.Workspace)/prev"
               [ -f "$prev/findings-consolidated.json" ] && args="$args --previous-findings $prev/findings-consolidated.json"
               if [ "$(Build.Reason)" = PullRequest ]; then

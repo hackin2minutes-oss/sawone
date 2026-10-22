@@ -19,6 +19,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import phases as PH  # noqa: E402
 from sawone_scan import STAGES, load_json, render_outputs  # noqa: E402
 
 PRE_EXISTING = "all {n} blocking finding(s) already exist on the base branch (not introduced by this change)"
@@ -46,7 +47,7 @@ def apply_new_only(stages, findings, base_fps):
 
 
 def merge(out: Path, sources, jobs=None, release=None, job_stage=None, expect=None, base_findings=None, pr_gate="all",
-          previous_findings=None, unchanged=None, languages=None):
+          previous_findings=None, unchanged=None, languages=None, phases=None):
     out.mkdir(parents=True, exist_ok=True)
     for d in ["sarif", "raw", "logs"]:
         (out / d).mkdir(exist_ok=True)
@@ -69,6 +70,8 @@ def merge(out: Path, sources, jobs=None, release=None, job_stage=None, expect=No
         merged["repository"] = merged["repository"] or summ.get("repository")
         if summ.get("options") and not merged.get("options"):
             merged["options"] = summ["options"]
+        if summ.get("phases") and not phases:
+            phases = summ["phases"]
         for f in (src / "sarif").glob("*.sarif"):
             dest = out / "sarif" / f.name
             if dest.exists():
@@ -115,6 +118,17 @@ def merge(out: Path, sources, jobs=None, release=None, job_stage=None, expect=No
         merged["stages"].append({"stage": st, "tool": "—", "status": "skipped", "gate": False, "findings": "",
                                  "reason": "not affected by this change (no relevant files changed); the base "
                                            "branch's results apply"})
+    # phases the caller did not select: their stages were not run, and the report says so
+    selected = PH.parse(phases) if phases else None
+    if selected and selected != PH.PHASES:
+        present = {r["stage"] for r in merged["stages"]}
+        for st in ["threat-model", "secrets", "sast", "sca", "iac", "kubernetes", "cicd", "container", "dast", "runtime"]:
+            ph = PH.phase_of(st)
+            if ph not in selected and st not in present:
+                merged["stages"].append({"stage": st, "tool": "—", "status": "skipped", "gate": False, "findings": "",
+                                         "reason": f"{PH.TITLES[ph]} phase not selected (phases: {','.join(selected)})"})
+    if selected:
+        merged["phases"] = selected
     # every part loads the same baseline and risk feeds: keep one policy row per tool (an error wins)
     pol, rows = {}, []
     for row in merged["stages"]:
@@ -162,6 +176,7 @@ def main():
     ap.add_argument("--previous-findings", help="findings-consolidated.json of the previous report (first-seen, trend, SLA)")
     ap.add_argument("--unchanged", default="", help="comma list of stages skipped because the change cannot affect them")
     ap.add_argument("--languages", default="", help="report languages, e.g. en,ar (overrides the scan config)")
+    ap.add_argument("--phases", default="", help="DevSecOps phases selected for this run, e.g. plan,code,build")
     ap.add_argument("sources", nargs="*")
     a = ap.parse_args()
     jobs = load_json(a.jobs) if a.jobs else None
@@ -172,7 +187,7 @@ def main():
     langs = [x.strip() for x in a.languages.split(",") if x.strip() in ("en", "ar")]
     sys.exit(merge(Path(a.out), a.sources, jobs, release, job_stage, expect, base, a.pr_gate,
                    a.previous_findings if a.previous_findings and Path(a.previous_findings).exists() else None,
-                   [x.strip() for x in a.unchanged.split(",") if x.strip()], langs or None))
+                   [x.strip() for x in a.unchanged.split(",") if x.strip()], langs or None, a.phases or None))
 
 
 if __name__ == "__main__":
