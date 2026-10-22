@@ -9,7 +9,7 @@ LABEL org.opencontainers.image.title="sawone-scanner" \
 # Docker CLI (to run the scanner containers), git (history scans), PDF libraries, fonts
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl git gnupg jq \
-       libpango-1.0-0 libpangoft2-1.0-0 fonts-dejavu-core fonts-inter fonts-noto-core \
+       libpango-1.0-0 libpangoft2-1.0-0 fonts-dejavu-core fonts-inter fonts-noto-core graphviz \
     && install -m 0755 -d /etc/apt/keyrings \
     && curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc \
     && echo "deb [signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian $(. /etc/os-release && echo "$VERSION_CODENAME") stable" \
@@ -25,7 +25,7 @@ RUN apt-get update \
 RUN pip install --no-cache-dir pyyaml weasyprint semgrep zizmor pytm \
     && git config --system --add safe.directory '*'
 
-COPY sawone_scan.py findings.py report.py report_i18n.py merge_reports.py dashboard.py /opt/sawone/
+COPY sawone_scan.py findings.py report.py report_i18n.py merge_reports.py dashboard.py threatmodel.py /opt/sawone/
 # defaults/ may include tools.lock.json, written by release.yml: the tool versions certified
 # with this scanner release (used when SCAN_TOOLS_LOCK=bundled)
 COPY defaults/ /opt/sawone/defaults/

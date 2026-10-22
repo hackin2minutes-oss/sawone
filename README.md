@@ -20,6 +20,7 @@ No configuration is needed. `.sawone.yml` changes defaults (`.sawone.example.yml
 | | |
 |---|---|
 | **Gate on what matters** | CVEs in CISA's **Known Exploited Vulnerabilities** catalogue block at any severity; an optional **EPSS** threshold blocks likely-to-be-exploited CVEs; **verified live secrets** (TruffleHog checks them against the provider, in code and Git history) are flagged first |
+| **Threat model you can trust** | pytm threats get a **data-flow diagram**, a **STRIDE** view and a status from the scanners' own evidence: **confirmed** when an attack on the running app proves it, **found in code**, or **theoretical**; a recorded mitigation that the scanners contradict is flagged; scanner findings the model does not cover are reported as **gaps in the model** |
 | **Quiet by default** | the same issue from several tools, or several rules of one tool, is **one finding**; a **balanced noise profile** counts low-severity second opinions without listing them; `noise.mute_rules` drops rules you never want; **false positives** are recorded with an owner and expiry and measured per tool |
 | **Fast pull requests** | **incremental scans**: secrets and SAST look only at the change (Gitleaks/TruffleHog from the base commit, Semgrep `--baseline-commit`), and dependency, IaC, Kubernetes, CI and threat-model gates are skipped when nothing they cover changed; PRs fail only on findings **they introduce** |
 | **Fix deadlines** | every finding keeps the date it was **first seen**; an **SLA** per severity (7/30/90/180 days by default) gives a due date, an "overdue" tag and an age breakdown; each report shows new versus fixed since the last scan |
@@ -34,7 +35,7 @@ No configuration is needed. `.sawone.yml` changes defaults (`.sawone.example.yml
 
 | Phase | What Sawone does | Where |
 |---|---|---|
-| **Plan** | threat model as code (pytm / Threagile) gate; compliance evidence map | `threat-model` gate, report |
+| **Plan** | threat model as code (pytm / Threagile): data-flow diagram, STRIDE, threats checked against scanner evidence, risk decisions; compliance evidence map | `threat-model` gate, report |
 | **Code** | secrets in code and history; SAST with rules per detected language/framework; CI/CD workflow security | Gitleaks, TruffleHog, Semgrep, actionlint, zizmor |
 | **Build** | dependencies and licences; IaC and Kubernetes misconfiguration; image build, SBOM, image CVEs | Trivy, OSV-Scanner, Checkov, Hadolint, kubeconform, kube-linter, Conftest, Syft, Grype |
 | **Test** | attacks the built image: ZAP baseline, active and API scans, Nuclei; optional DongTai IAST | `attack` jobs |
@@ -117,6 +118,48 @@ Missing owner, reason or expiry, or an expiry too far ahead, makes the baseline 
 is a scanner error, so a typo can never silently hide (or un-hide) a finding. The report lists
 every accepted risk with its owner and expiry, and every expired one.
 
+## Threat model
+
+Keep the model as code in `threatmodel/tm.py` ([OWASP pytm](https://github.com/OWASP/pytm)): actors, processes,
+datastores, trust boundaries and ordered dataflows. On every run Sawone:
+
+1. **runs it** and gates on threats at or above `threat_model.min_severity` (default Very High) without a decision;
+2. **draws it**: a data-flow diagram (trust boundaries, unencrypted boundary crossings in red) and a sequence
+   diagram of the flows, both in the PDF and as `threatmodel/*.svg`;
+3. **classifies** every threat by STRIDE and shows an element × STRIDE matrix;
+4. **checks it against the scanners**: each threat is matched to findings of the same attack class (CWE, ZAP
+   alert, rule) on the same element. An attack on the running app (ZAP, Nuclei, WAF) or a live secret makes it
+   **confirmed exploitable**; a SAST, IaC or secret finding makes it **found in code or config**; nothing makes
+   it **theoretical**. Attack evidence only attaches to elements reachable from outside; code evidence only to
+   files listed in the element's `sourceFiles` (when set). Third-party elements (an external site in the
+   actors' boundary) never take your evidence;
+5. **reports gaps**: kinds of weakness the scanners found that no threat in the model covers (for example SSRF
+   on a user-supplied URL, or leaked credentials), so the model gets fixed too.
+
+Record decisions in the baseline file, next to accepted findings:
+
+```yaml
+# .sawone-baseline.yml
+threats:
+  - threat: INP31             # pytm threat ID
+    element: Flask app        # or * for every element
+    decision: mitigate        # mitigate | accept | transfer
+    control: ping runs subprocess with an argument list, no shell (PR #14)   # mitigate: the control
+    owner: sawan
+    expires: 2027-03-31
+  - threat: DO01
+    element: "*"
+    decision: accept          # accept / transfer need a reason
+    reason: internal app behind the corporate proxy, which rate-limits
+    owner: sawan
+    expires: 2027-01-31
+```
+
+A decided threat stops blocking until it expires. If the scanners still find the weakness behind a
+*mitigate* decision, the report marks it **mitigation contradicted** and it keeps blocking. Invalid entries are
+ignored (the threat stays open) and listed. `MITIGATED = {...}` in `tm.py` still works. Threagile models
+(`threagile.yaml`) are gated on their open HIGH/CRITICAL risks.
+
 ## Compliance evidence
 
 Every report includes an evidence map in the job summary, the PR comment and the PDF. For each
@@ -176,7 +219,7 @@ governance evidence a pipeline cannot produce. The mapping lives in
 
 | Gate | Fails when |
 |---|---|
-| Threat model | a Very High threat has no recorded decision |
+| Threat model | a threat at or above `min_severity` has no decision, or its mitigation is contradicted by scanner evidence |
 | Secrets | any Gitleaks finding; any verified live credential |
 | SAST | any Semgrep ERROR finding |
 | SCA / licences | fixable CVE at/above `gate-severity`; forbidden/restricted licence |
@@ -293,6 +336,7 @@ with the workspace visible to it.
 
 | File | What |
 |---|---|
+| `threat-model.json`, `threatmodel/` | threats with STRIDE, status, evidence and decisions; DFD and sequence diagrams (SVG) |
 | `security-report.pdf` / `security-report-ar.pdf` | the whole story in English / Arabic: gates, risk-ranked findings, trend and fix deadlines, accepted risks and false positives, compliance evidence, supply chain, tool versions, evidence index |
 | `evidence/` | `index.json` (controls → evidencing files with SHA-256) and `manifest.sha256` |
 | `summary.md` / `summary.json` | results table (also the job summary and PR comment) |

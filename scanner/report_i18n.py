@@ -398,3 +398,69 @@ AR = {
     "Upgrade to": "التحديث إلى", "Version / image digest": "الإصدار / بصمة الصورة", "Where": "المكان",
     "Worst": "الأشد", "Details": "التفاصيل", "Found by": "اكتشفتها",
 }
+
+# threat model (Sawone 1.1)
+AR.update({
+    "A mitigation is recorded for these threats, but the scanners still found the weakness. Check that the control is really in place.":
+        "سُجّل إجراء تخفيف لهذه التهديدات، لكن أدوات الفحص ما زالت تجد الثغرة. تحقّق من أن الضابط مطبّق فعلاً.",
+    "At or above the gate threshold, needing a decision": "عند حد البوابة أو أعلى، وتحتاج إلى قرار",
+    "Dashed red frames are trust boundaries. A red flow crosses a boundary unencrypted. An element with a thick red border has a threat confirmed by an attack scan; orange: found in code or configuration. Numbers give the order of the flows.":
+        "الإطارات الحمراء المتقطعة حدود ثقة. التدفق الأحمر يعبر حداً دون تشفير. العنصر ذو الإطار الأحمر السميك له تهديد أكّده فحص هجومي، "
+        "والبرتقالي وُجد في الشيفرة أو الإعدادات. تشير الأرقام إلى ترتيب التدفقات.",
+    "Data-flow diagram": "مخطط تدفق البيانات",
+    "Every threat with its evidence is in {f}.": "كل تهديد مع أدلته موجود في {f}.",
+    "Expired decision: {t} on {el} (owner {o}, expired {d}); the threat is open again.":
+        "قرار منتهي الصلاحية: {t} على {el} (المسؤول {o}، انتهى في {d})؛ أصبح التهديد مفتوحاً من جديد.",
+    "Gaps in the model": "ثغرات في النموذج",
+    "Invalid decision ignored: {e}": "قرار غير صالح تم تجاهله: {e}",
+    "No risk decisions recorded yet. Record them under {m} in {f}: decision mitigate, accept or transfer, with an owner, an expiry and the control or reason.":
+        "لم تُسجَّل أي قرارات للمخاطر بعد. سجّلها تحت {m} في {f}: القرار (تخفيف أو قبول أو نقل) مع المسؤول وتاريخ الانتهاء والضابط أو السبب.",
+    "No scanner evidence either way: these need a design review. By element:":
+        "لا توجد أدلة من أدوات الفحص في أي اتجاه، وتحتاج إلى مراجعة للتصميم. حسب العنصر:",
+    "Number of threats per element and STRIDE category, coloured by the worst status: red confirmed, orange found in code, grey theoretical, green decided. External elements are outside the system under review and take no scanner evidence.":
+        "عدد التهديدات لكل عنصر وفئة STRIDE، ملوّناً حسب أسوأ حالة: الأحمر مؤكَّد، والبرتقالي في الشيفرة، والرمادي نظري، والأخضر مقرَّر. "
+        "العناصر الخارجية خارج النظام قيد المراجعة ولا تُنسب إليها أدلة الفحص.",
+    "Record a decision for the {n} open threat(s): implement the mitigation, or add it under {m} in {f} with an owner and expiry.":
+        "سجّل قراراً لـ {n} من التهديدات المفتوحة: طبّق إجراء التخفيف، أو أضفه تحت {m} في {f} مع المسؤول وتاريخ الانتهاء.",
+    "Risk decisions": "قرارات المخاطر",
+    "STRIDE per element": "STRIDE لكل عنصر",
+    "Sequence of data flows": "تسلسل تدفقات البيانات",
+    "The diagram could not be drawn (Graphviz is not installed where the report was built). The model is in {f}.":
+        "تعذّر رسم المخطط (Graphviz غير مثبّت حيث أُنشئ التقرير). النموذج موجود في {f}.",
+    "The model {name} describes {e} element(s), {f} data flow(s) and {b} trust boundary(ies). pytm derived {n} threats from it. Sawone classified each one by STRIDE and checked it against what the scanners actually found on the same element.":
+        "يصف النموذج {name} عدد {e} من العناصر و{f} من تدفقات البيانات و{b} من حدود الثقة. استخرج منه pytm عدد {n} من التهديدات. "
+        "صنّف Sawone كل تهديد حسب STRIDE وقارنه بما وجدته أدوات الفحص فعلاً على العنصر نفسه.",
+    "The scanners found these kinds of weakness, but the threat model has no threat that covers them. Add the missing elements or flows to the model so the design review sees them.":
+        "وجدت أدوات الفحص هذه الأنواع من الثغرات، لكن نموذج التهديدات لا يحتوي على تهديد يغطيها. أضف العناصر أو التدفقات الناقصة إلى النموذج حتى تظهر في مراجعة التصميم.",
+    "Theoretical threats ({n})": "تهديدات نظرية ({n})",
+    "Threats with scanner evidence ({n})": "تهديدات لها أدلة من أدوات الفحص ({n})",
+    "external": "خارجي",
+    "{n} threat(s) in the threat model are confirmed exploitable by the attack scans; fix them before release (see Threat modelling).":
+        "أكّدت الفحوص الهجومية قابلية استغلال {n} من تهديدات النموذج؛ عالجها قبل الإصدار (انظر نمذجة التهديدات).",
+    "⚡ marks evidence from an attack on the running application (or a secret verified as live); the other evidence is static (code, configuration).":
+        "⚡ يشير إلى دليل من هجوم على التطبيق العامل (أو سرّ تم التحقق من أنه فعّال)؛ والأدلة الأخرى ثابتة (شيفرة أو إعدادات).",
+    # headers, kinds, STRIDE, statuses, decisions, attack classes
+    "Evidence": "الأدلة", "Attack class": "فئة الهجوم", "Findings": "النتائج", "Confirmed": "مؤكَّد",
+    "Examples": "أمثلة", "Decision": "القرار", "Control or reason": "الضابط أو السبب",
+    "Process": "عملية", "Datastore": "مخزن بيانات", "Dataflow": "تدفق بيانات", "Actor": "جهة فاعلة", "Server": "خادم",
+    "Lambda": "دالة", "ExternalEntity": "جهة خارجية",
+    "Spoofing": "انتحال الهوية", "Tampering": "العبث", "Repudiation": "الإنكار", "Information disclosure": "كشف المعلومات",
+    "Denial of service": "حجب الخدمة", "Elevation of privilege": "رفع الصلاحيات",
+    "Confirmed exploitable": "قابل للاستغلال (مؤكَّد)", "Found in code or config": "وُجد في الشيفرة أو الإعدادات",
+    "Theoretical": "نظري", "Decided": "مقرَّر", "Mitigation contradicted": "تخفيف تنقضه الأدلة", "In code": "في الشيفرة",
+    "Mitigated": "مخفَّف", "Transferred": "منقول", "Contradicted": "تنقضه الأدلة",
+    "Mitigate": "تخفيف", "Accept": "قبول", "Transfer": "نقل",
+    "SQL injection": "حقن SQL", "OS command injection": "حقن أوامر النظام", "Code or template injection": "حقن الشيفرة أو القوالب",
+    "Cross-site scripting": "البرمجة عبر المواقع (XSS)", "Path traversal and file inclusion": "اجتياز المسارات وتضمين الملفات",
+    "Buffer and integer overflow": "تجاوز سعة المخزن المؤقت والأعداد", "Format string injection": "حقن سلاسل التنسيق",
+    "Server-side request forgery": "تزوير الطلبات من جهة الخادم (SSRF)", "XML injection and entity expansion": "حقن XML وتوسيع الكيانات",
+    "Cross-site request forgery": "تزوير الطلبات عبر المواقع (CSRF)", "Clickjacking (UI redress)": "اختطاف النقرات",
+    "Session handling": "إدارة الجلسات", "Unencrypted or weak transport": "نقل غير مشفّر أو ضعيف",
+    "Weak cryptography and password storage": "تشفير ضعيف وتخزين كلمات المرور", "Authentication": "المصادقة",
+    "Authorisation and privilege": "التفويض والصلاحيات", "Hard-coded or leaked credentials": "بيانات اعتماد مضمّنة أو مسرّبة",
+    "Data at rest and storage access": "البيانات المخزّنة والوصول إلى التخزين", "Logging and audit trail": "السجلات ومسار التدقيق",
+})
+AR.update({
+    "Code findings are attributed to every one of these elements because none of them lists its {sf} in the model: {els}. Set {sf} on each so evidence lands on the right element.":
+        "تُنسب نتائج الشيفرة إلى كل هذه العناصر لأن أياً منها لا يحدد {sf} في النموذج: {els}. حدّد {sf} لكل عنصر حتى تُنسب الأدلة إلى العنصر الصحيح.",
+})

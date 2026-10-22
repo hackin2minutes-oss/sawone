@@ -1,0 +1,9 @@
+# Self-test: a mitigation the scanners contradict (the app still runs ping through a shell).
+exceptions: []
+threats:
+  - threat: INP31
+    element: Flask API
+    decision: mitigate
+    control: ping runs without a shell (claimed, not true; the report must flag it)
+    owner: selftest
+    expires: 2027-06-30

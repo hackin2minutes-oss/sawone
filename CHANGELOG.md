@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.1.0 — Threat model you can check
+
+- **Data-flow diagram** of the pytm model (trust boundaries, element types, ordered flows, unencrypted
+  boundary crossings in red, elements coloured by threat status) and a **sequence diagram** of the flows, in
+  the PDF and as `threatmodel/dfd.svg` / `sequence.svg`. Graphviz is now in the scanner image.
+- **STRIDE**: every pytm threat gets its primary STRIDE category; the report shows an element × STRIDE matrix.
+- **Threats checked against scanner evidence**: each threat is matched to SAST, IaC, secret and attack
+  findings of the same attack class on the same element: *confirmed exploitable*, *found in code or
+  config*, or *theoretical*. Third-party elements never take your evidence; `sourceFiles` scopes code evidence.
+- **Gaps in the model**: kinds of weakness the scanners found that no threat in the model covers.
+- **Risk decisions** under `threats:` in the baseline file (mitigate / accept / transfer, owner, expiry); a
+  mitigation the scanners contradict is flagged and keeps blocking. `MITIGATED` in `tm.py` still works.
+- `threat-model.json` (every threat with STRIDE, status, evidence, decision) and the diagrams are part of the
+  evidence pack for the threat-modelling controls; the job summary and PR comment show the threat-model line.
+- The self-test app now has a threat model; `validate` asserts the diagrams, the evidence links and a
+  contradicted mitigation end to end.
+
 ## 1.0.1 — Fixes from the first real runs
 
 - Scans no longer fail at "validate inputs" on pushes (the plan step's last command returned 1 when

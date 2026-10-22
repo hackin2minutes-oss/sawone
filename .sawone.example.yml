@@ -52,7 +52,7 @@ source_sbom:
   enabled: true               # Syft CycloneDX SBOM of the repository (raw/sbom-source.cdx.json)
 
 threat_model:
-  min_severity: Very High     # pytm threats at/above this need a decision in MITIGATED
+  min_severity: Very High     # pytm threats at/above this need a decision (threats: in the baseline file)
 
 policy:
   block_kev: true             # CVEs in the CISA Known Exploited Vulnerabilities catalogue block at any severity

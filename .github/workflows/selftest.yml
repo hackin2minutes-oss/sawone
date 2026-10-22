@@ -24,7 +24,7 @@ jobs:
       matrix:
         include:
           - fixture: python-flask
-            expect_failed: "secrets sast sca container"
+            expect_failed: "threat-model secrets sast sca container"
           - fixture: node-express
             expect_failed: "sca container"
           - fixture: terraform-aws
@@ -67,4 +67,8 @@ jobs:
             missing=1
           fi
           test -s "$REPORTS/security-report.pdf" || { echo "::error::no PDF report"; missing=1; }
+          if [ -f "$REPORTS/threat-model.json" ]; then
+            jq -r '"threat model: \(.total) threats, \(.counts.confirmed) confirmed, \(.counts["in-code"]) in code"' "$REPORTS/threat-model.json"
+            grep -q '<svg' "$REPORTS/threatmodel/dfd.svg" || { echo "::error::no data-flow diagram"; missing=1; }
+          fi
           exit $missing

@@ -211,6 +211,31 @@ def sev_pill(sev):
     return f'<span class="sev sev-{sev.lower()}">{T(SEV_LABEL[sev])}</span>'
 
 
+TM_ORDER = ["contradicted", "confirmed", "in-code", "theoretical", "transferred", "accepted", "mitigated"]
+TM_LABEL = {"confirmed": "Confirmed exploitable", "in-code": "Found in code or config", "theoretical": "Theoretical",
+            "mitigated": "Mitigated", "accepted": "Risk accepted", "transferred": "Risk transferred",
+            "contradicted": "Mitigation contradicted"}
+TM_STRIDE = {"S": "Spoofing", "T": "Tampering", "R": "Repudiation", "I": "Information disclosure",
+             "D": "Denial of service", "E": "Elevation of privilege"}
+TM_SEV = ["Low", "Medium", "High", "Very High"]
+TM_SEV_MAP = {"Very High": "CRITICAL", "High": "HIGH", "Medium": "MEDIUM", "Low": "LOW"}
+
+
+TM_SHORT = {"confirmed": "Confirmed", "in-code": "In code", "theoretical": "Theoretical", "mitigated": "Mitigated",
+            "accepted": "Accepted", "transferred": "Transferred", "contradicted": "Contradicted"}
+
+
+def tm_pill(status):
+    return f'<span class="pill tmp-{esc(status)}">{esc(T(TM_SHORT.get(status, status)))}</span>'
+
+
+def figure(svg, name):
+    """An SVG diagram as an image (diagrams stay left-to-right in the Arabic report too)."""
+    import base64
+    data = base64.b64encode(svg.encode()).decode()
+    return f'<div class="diagram" dir="ltr"><img alt="{esc(name)}" src="data:image/svg+xml;base64,{data}"/></div>'
+
+
 def status_pill(status):
     return f'<span class="pill {STATUS_CLS.get(status, "warn")}">{esc(T(STATUS_LABEL.get(status, status)))}</span>'
 
@@ -335,6 +360,12 @@ class Data:
         tm_files = sorted(glob.glob(str(reports / "raw" / "**" / "threats.json"), recursive=True)) + \
             [str(p) for p in (reports / "threats.json", reports / "threat-model" / "threats.json") if p.exists()]
         self.threats = next((d for d in map(load_json, tm_files) if d), None)
+        self.tm = load_json(reports / "threat-model.json")          # STRIDE, evidence and decisions
+        self.tm_svg = {}
+        for name in ("dfd", "sequence"):
+            svg = reports / "threatmodel" / f"{name}.svg"
+            if svg.exists():
+                self.tm_svg[name] = svg.read_text()
         self.sboms = []
         for p in sorted(glob.glob(str(reports / "raw" / "**" / "sbom-*.cdx.json"), recursive=True)):
             d = load_json(p) or {}
@@ -687,6 +718,16 @@ PAGE_AR = r"""
 }
 """
 SLA_CSS = r"""
+.diagram { text-align: center; margin: 2mm 0 1mm 0; page-break-inside: avoid; }
+.diagram img { max-width: 100%; max-height: 120mm; }
+table.stride td { text-align: center; } table.stride td:first-child { text-align: inherit; }
+.tmc { display: inline-block; min-width: 6mm; padding: .3mm 1mm; border-radius: 1mm; font-weight: 700; font-size: 7.4pt; }
+.tm-confirmed, .tmp-confirmed { background: #fee2e2; color: #991b1b; }
+.tm-contradicted, .tmp-contradicted { background: #7f1d1d; color: #fff; }
+.tm-in-code, .tmp-in-code { background: #ffedd5; color: #9a3412; }
+.tm-theoretical, .tmp-theoretical { background: #f1f5f9; color: #475569; }
+.tm-mitigated, .tmp-mitigated, .tm-accepted, .tmp-accepted, .tm-transferred, .tmp-transferred { background: #dcfce7; color: #166534; }
+h4 { font-size: 8.6pt; margin: 3mm 0 1.5mm 0; }
 table.trend td { text-align: center; } table.trend td:first-child { text-align: inherit; }
 .ev { font-size: 6.8pt; }
 """
@@ -913,11 +954,16 @@ class Report:
             acts.append((2, "CI/CD", T("Harden the workflows: {n} high-risk pattern(s) flagged by zizmor (for example "
                                        "script injection, broad permissions or unpinned actions).", n=len(cicd) or 1)))
         tm = stage_items("threat-model")
+        conf = [x for x in ((d.tm or {}).get("threats") or []) if x["status"] in ("confirmed", "contradicted")]
+        if conf:
+            acts.append((1, "Threat model", T("{n} threat(s) in the threat model are confirmed exploitable by the "
+                                              "attack scans; fix them before release (see Threat modelling).",
+                                              n=len(conf))))
         if tm:
-            acts.append((3, "Threat model", T("Record a decision for the {n} open threat(s) in {f}: implement the "
-                                              "mitigation, or add it to {m} with an owner and reason.", n=len(tm),
-                                              f="<span class='mono'>threatmodel/tm.py</span>",
-                                              m="<span class='mono'>MITIGATED</span>")))
+            acts.append((3, "Threat model", T("Record a decision for the {n} open threat(s): implement the "
+                                              "mitigation, or add it under {m} in {f} with an owner and expiry.", n=len(tm),
+                                              f="<span class='mono'>.sawone-baseline.yml</span>",
+                                              m="<span class='mono'>threats:</span>")))
         if "runtime" in failed_stages:
             acts.append((2, "Runtime protection", T("The WAF let an attack through or blocked legitimate traffic; "
                                                     "review its rules.")))
@@ -1216,6 +1262,166 @@ class Report:
 
     # threat model
     def stage_threats(self, srows):
+        if self.d.tm and self.d.tm.get("threats") is not None:
+            return self.threat_model(srows)
+        return self.stage_threats_basic(srows)
+
+    def threat_model(self, srows):
+        d, tm = self.d, self.d.tm
+        out = [f'<div class="tool">{self.panel_head(r)}</div>' for r in srows]
+        c = tm["counts"]
+        elems = tm.get("matrix") or {}
+        model = d.threats or {}
+        nflows = len(model.get("flows") or [])
+        nb = len(model.get("boundaries") or [])
+        out.append("<p>" + T("The model {name} describes {e} element(s), {f} data flow(s) and {b} trust boundary(ies). "
+                             "pytm derived {n} threats from it. Sawone classified each one by STRIDE and checked it "
+                             "against what the scanners actually found on the same element.",
+                             name=f"<b>{esc(tm.get('name') or '')}</b>", e=len([k for k, v in elems.items()
+                                                                                if v["kind"] != "Dataflow"]),
+                             f=nflows, b=nb, n=tm["total"]) + "</p>")
+        if tm.get("description"):
+            out.append(note(esc(tm["description"])))
+        tiles = [(c["confirmed"], "Confirmed exploitable", "red" if c["confirmed"] else "green"),
+                 (c["in-code"], "Found in code or config", "amber" if c["in-code"] else "green"),
+                 (c["theoretical"], "Theoretical", "blue"),
+                 (c["mitigated"] + c["accepted"] + c["transferred"], "Decided", "green"),
+                 (c["contradicted"], "Mitigation contradicted", "dark" if c["contradicted"] else "green")]
+        out.append('<table class="tiles"><tr>' + "".join(
+            f'<td><div class="tile-n {col}">{n}</div><div class="tile-l">{esc(T(lbl))}</div></td>' for n, lbl, col in tiles)
+            + "</tr></table>")
+
+        # diagrams
+        out.append(f"<h3>{T('Data-flow diagram')}</h3>")
+        if d.tm_svg.get("dfd"):
+            out.append(figure(d.tm_svg["dfd"], "dfd"))
+            out.append(note(T("Dashed red frames are trust boundaries. A red flow crosses a boundary unencrypted. "
+                              "An element with a thick red border has a threat confirmed by an attack scan; orange: "
+                              "found in code or configuration. Numbers give the order of the flows.")))
+        else:
+            out.append(callout(T("The diagram could not be drawn (Graphviz is not installed where the report was "
+                                 "built). The model is in {f}.", f="<span class='mono'>threat-model.json</span>"), "info"))
+        if d.tm_svg.get("sequence"):
+            out.append(f"<h3>{T('Sequence of data flows')}</h3>")
+            out.append(figure(d.tm_svg["sequence"], "seq"))
+
+        # STRIDE matrix
+        out.append(f"<h3>{T('STRIDE per element')}</h3>")
+        letters = list("STRIDE")
+        rows = []
+        for name, row in sorted(elems.items(), key=lambda kv: (kv[1]["kind"] == "Dataflow", kv[0])):
+            cells = []
+            for k in letters:
+                sts = row["cells"].get(k) or []
+                if not sts:
+                    cells.append('<span class="muted">·</span>')
+                    continue
+                worst = min(sts, key=lambda s: TM_ORDER.index(s) if s in TM_ORDER else 99)
+                cells.append(f'<span class="tmc tm-{worst}">{len(sts)}</span>')
+            ext = name in (tm.get("external") or [])
+            label = esc(name) + (f' <span class="tag">{T("external")}</span>' if ext else "")
+            rows.append([f'{label}<br/><span class="muted small">{T(row["kind"])}</span>'] + cells)
+        out.append(table(["Element"] + [f'{k}<br/><span class="small muted">{esc(T(TM_STRIDE[k]))}</span>' for k in letters],
+                         rows, "stride", ["28%"] + ["12%"] * 6))
+        if tm.get("unscoped"):
+            out.append(callout(T("Code findings are attributed to every one of these elements because none of them "
+                                 "lists its {sf} in the model: {els}. Set {sf} on each so evidence lands on the right "
+                                 "element.", sf="<span class='mono'>sourceFiles</span>",
+                                 els=", ".join(f"<b>{esc(x)}</b>" for x in tm["unscoped"])), "warn"))
+        out.append(note(T("Number of threats per element and STRIDE category, coloured by the worst status: red "
+                          "confirmed, orange found in code, grey theoretical, green decided. External elements are "
+                          "outside the system under review and take no scanner evidence.")))
+
+        # threats with evidence
+        threats = tm["threats"]
+        hot = sorted([x for x in threats if x["status"] in ("contradicted", "confirmed", "in-code")],
+                     key=lambda x: (TM_ORDER.index(x["status"]), -TM_SEV.index(x["severity"]) if x["severity"] in TM_SEV else 0,
+                                    x["target"], x["sid"]))
+        if hot:
+            out.append(f"<h3>{T('Threats with scanner evidence ({n})', n=len(hot))}</h3>")
+            rows = []
+            for x in hot[:MAX_ROWS]:
+                ev = "".join(f'<div class="ev">{"⚡ " if e["strength"] == "confirmed" else ""}{esc(short_tool(e["tool"] or ""))}: '
+                             f'<span class="mono">{esc(short(e["id"], 46))}</span>'
+                             + (f' <span class="muted">{esc(compact_path(e.get("location") or "", 34))}</span>' if e.get("location") else "")
+                             + "</div>" for e in x["evidence"][:3])
+                if x["evidence_total"] > 3:
+                    ev += f'<div class="ev muted">{T("+{n} more", n=x["evidence_total"] - 3)}</div>'
+                mit = first_sentence(strip_html(x.get("mitigations") or "", 600), 150)
+                rows.append([tm_pill(x["status"]) + "<br/>" + sev_pill(TM_SEV_MAP.get(x["severity"], x["severity"])),
+                             f'<span class="mono small">{esc(x["sid"])}</span> · <b>{esc(x["stride"])}</b><br/>{esc(short(x["title"], 80))}'
+                             f'<br/><span class="muted small">{esc(x["target"])}</span>',
+                             ev, f'<span class="small">{esc(mit) or "—"}</span>'])
+            out.append(table(["Status", "Threat", "Evidence", "Suggested mitigation"], rows, "findings",
+                             ["15%", "29%", "32%", "24%"]))
+            if len(hot) > MAX_ROWS:
+                out.append(note(T("Showing {limit} of {total}.", limit=MAX_ROWS, total=len(hot))))
+            out.append(note(T("⚡ marks evidence from an attack on the running application (or a secret verified as "
+                              "live); the other evidence is static (code, configuration).")))
+
+        # model gaps
+        if tm.get("gaps"):
+            out.append(f"<h3>{T('Gaps in the model')}</h3>")
+            out.append(callout(T("The scanners found these kinds of weakness, but the threat model has no threat that "
+                                 "covers them. Add the missing elements or flows to the model so the design review "
+                                 "sees them."), "warn"))
+            rows = [[esc(T(g["title"])), str(g["findings"]), str(g["confirmed"]) if g["confirmed"] else "—",
+                     "<br/>".join(f'<span class="small">{esc(short(x, 80))}</span>' for x in g["examples"])]
+                    for g in tm["gaps"]]
+            out.append(table(["Attack class", "Findings", "Confirmed", "Examples"], rows, "findings",
+                             ["24%", "10%", "11%", "55%"]))
+
+        # decisions
+        decided = [x for x in threats if x.get("decision")]
+        if decided or tm.get("decisions_expired") or tm.get("decision_errors"):
+            out.append(f"<h3>{T('Risk decisions')}</h3>")
+            rows = []
+            for x in sorted(decided, key=lambda x: (x["status"] != "contradicted", x["target"], x["sid"])):
+                dcs = x["decision"]
+                what = dcs.get("control") or dcs.get("reason") or ""
+                rows.append([tm_pill(x["status"]), f'<span class="mono small">{esc(x["sid"])}</span> {esc(short(x["title"], 60))}'
+                             f'<br/><span class="muted small">{esc(x["target"])}</span>',
+                             esc(T({"mitigate": "Mitigate", "accept": "Accept", "transfer": "Transfer"}[dcs["decision"]])),
+                             esc(dcs.get("owner") or "—"), esc(dcs.get("expires") or "—"),
+                             f'<span class="small">{esc(short(what, 120))}</span>'])
+            if rows:
+                out.append(table(["Status", "Threat", "Decision", "Owner", "Expires", "Control or reason"], rows,
+                                 "findings", ["14%", "30%", "10%", "11%", "11%", "24%"]))
+            if any(x["status"] == "contradicted" for x in decided):
+                out.append(callout(T("A mitigation is recorded for these threats, but the scanners still found the "
+                                     "weakness. Check that the control is really in place."), "danger"))
+            for e in tm.get("decisions_expired") or []:
+                out.append(note(T("Expired decision: {t} on {el} (owner {o}, expired {d}); the threat is open again.",
+                                  t=esc(e["threat"]), el=esc(e["element"]), o=esc(e["owner"]), d=esc(e["expires"]))))
+            for e in tm.get("decision_errors") or []:
+                out.append(note(T("Invalid decision ignored: {e}", e=esc(e)), "muted"))
+        else:
+            out.append(note(T("No risk decisions recorded yet. Record them under {m} in {f}: decision mitigate, "
+                              "accept or transfer, with an owner, an expiry and the control or reason.",
+                              m="<span class='mono'>threats:</span>",
+                              f="<span class='mono'>.sawone-baseline.yml</span>")))
+
+        # theoretical
+        theo = [x for x in threats if x["status"] == "theoretical"]
+        if theo:
+            out.append(f"<h3>{T('Theoretical threats ({n})', n=len(theo))}</h3>")
+            gating = [x for x in theo if x.get("gating")]
+            by_el = Counter(x["target"] for x in theo)
+            out.append("<p>" + T("No scanner evidence either way: these need a design review. By element:") + " "
+                       + " · ".join(f"{esc(k)} <b>{v}</b>" for k, v in by_el.most_common()) + "</p>")
+            if gating:
+                rows = [[sev_pill(TM_SEV_MAP.get(x["severity"], x["severity"])),
+                         f'<span class="mono small">{esc(x["sid"])}</span> · <b>{esc(x["stride"])}</b> {esc(short(x["title"], 70))}',
+                         esc(x["target"]),
+                         f'<span class="small">{esc(first_sentence(strip_html(x.get("mitigations") or "", 600), 150)) or "—"}</span>']
+                        for x in gating[:MAX_ROWS]]
+                out.append(f"<h4>{T('At or above the gate threshold, needing a decision')}</h4>")
+                out.append(table(["Severity", "Threat", "Element", "Suggested mitigation"], rows, "findings",
+                                 ["11%", "37%", "16%", "36%"]))
+            out.append(note(T("Every threat with its evidence is in {f}.", f="<span class='mono'>threat-model.json</span>")))
+        return "".join(out)
+
+    def stage_threats_basic(self, srows):
         d, out = self.d, []
         for r in srows:
             items, _ = d.tool_findings(r)

@@ -33,7 +33,8 @@ import xml.sax.saxutils as sx
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import findings as F  # noqa: E402
+import findings as F
+import threatmodel as TMA  # noqa: E402
 
 try:
     import yaml  # PyYAML, present in the scanner image
@@ -569,11 +570,18 @@ class Scan:
                 self.record("threat-model", "OWASP pytm", "error", "model failed to run (see logs/pytm.log)")
             else:
                 mitigated = self._load_mitigated(inv["threat_model"])
+                decisions, expired, derrs = self.threat_decisions()
                 order = ["Low", "Medium", "High", "Very High"]
                 floor = order.index(self.cfg["threat_model"]["min_severity"])
+
+                def decided(f):
+                    return (f'{f["threat_id"]}@{f["target"]}' in mitigated
+                            or TMA._decision_for(f["threat_id"], f["target"], decisions) is not None)
                 open_items = [f for f in data.get("findings", [])
-                              if f.get("severity") in order and order.index(f["severity"]) >= floor
-                              and f'{f["threat_id"]}@{f["target"]}' not in mitigated]
+                              if f.get("severity") in order and order.index(f["severity"]) >= floor and not decided(f)]
+                (self.reports / "raw" / "threat-decisions.json").write_text(json.dumps(
+                    {"active": decisions, "expired": expired, "errors": derrs, "mitigated": mitigated,
+                     "min_severity": self.cfg["threat_model"]["min_severity"]}, indent=1))
                 open_keys = {f'{f["threat_id"]}@{f["target"]}' for f in open_items}
                 items = [F.issue("threat-model", "OWASP pytm", "threat", f.get("threat_id"), inv["threat_model"], None,
                                  {"Very High": "CRITICAL"}.get(f.get("severity"), f.get("severity")),
@@ -582,8 +590,12 @@ class Scan:
                          for f in data.get("findings", []) if f.get("threat_id")]
                 for it in items:
                     it["location"] = f'{inv["threat_model"]} · {it["title"].rsplit(" — ", 1)[-1]}'
+                note = "".join([f" · {len(decisions)} decision(s)" if decisions else "",
+                                f" · {len(expired)} expired decision(s)" if expired else "",
+                                f" · {len(derrs)} invalid decision(s) ignored" if derrs else ""])
                 self.gate("threat-model", "OWASP pytm", len(open_items),
-                          f"{len(data.get('findings', []))} threats, {len(open_items)} open at ≥ {order[floor]}", items=items)
+                          f"{len(data.get('findings', []))} threats, {len(open_items)} open at ≥ {order[floor]}{note}",
+                          items=items)
         elif inv["threagile"] and not self.skipped("threagile"):
             outdir = self.reports / "raw" / "threagile"
             outdir.mkdir(parents=True, exist_ok=True)
@@ -602,6 +614,13 @@ class Scan:
                           items=items)
         else:
             self.record("threat-model", "—", "skipped", "no threatmodel/tm.py (pytm) or threagile.yaml found", gate=False)
+
+    def threat_decisions(self):
+        """`threats:` in the baseline file: mitigate / accept / transfer, each with an owner and expiry."""
+        name = self.cfg["baseline"]["file"]
+        if name == ".sawone-baseline.yml" and not (self.ws / name).exists() and (self.ws / ".sawanb-baseline.yml").exists():
+            name = ".sawanb-baseline.yml"
+        return TMA.load_decisions(self.ws / name, max_days=int(self.cfg["baseline"].get("max_days", 365)))
 
     def _load_mitigated(self, tm_path):
         code = ("import importlib.util,json,sys;s=importlib.util.spec_from_file_location('tm',sys.argv[1]);"
@@ -1678,7 +1697,8 @@ def _f_row(f):
 
 
 EVIDENCE_FILES = {
-    "threat-model": ["raw/**/threats.json", "raw/**/threagile/risks.json"],
+    "threat-model": ["raw/**/threats.json", "raw/**/threagile/risks.json", "threat-model.json",
+                     "threatmodel/*.svg", "raw/**/threat-decisions.json"],
     "secrets": ["sarif/*gitleaks*.sarif", "raw/**/trufflehog*.jsonl"],
     "sast": ["sarif/*semgrep*.sarif"],
     "sca": ["sarif/*trivy-sca*.sarif", "sarif/*osv*.sarif", "raw/**/sbom-source.cdx.json"],
@@ -1752,12 +1772,52 @@ def write_manifest(reports):
     (reports / "evidence" / "manifest.sha256").write_text("\n".join(lines) + "\n")
 
 
+def threat_analysis(reports, merged):
+    """STRIDE, scanner evidence and decisions for the pytm model of this run (threat-model.json, diagrams)."""
+    reports = Path(reports)
+    files = sorted(reports.glob("raw/**/threats.json"))
+    model = load_json(files[0]) if files else None
+    if not model or not model.get("findings"):
+        return None
+    dfiles = sorted(reports.glob("raw/**/threat-decisions.json"))
+    dec = (load_json(dfiles[0]) if dfiles else None) or {}
+    try:
+        return TMA.build(reports, model, merged, dec.get("active") or [], dec.get("expired") or [],
+                         dec.get("errors") or [], dec.get("mitigated") or {}, dec.get("min_severity") or "Very High")
+    except Exception as e:      # the analysis must never cost the run its report
+        log(f"threat-model analysis failed: {e}")
+        return None
+
+
+def regate_contradicted(tm, stages, raw, reports):
+    """A mitigation recorded for a threat the scanners still prove is not a mitigation: the gate job could
+    not know (it runs before the other scanners), so the threat blocks again here, once the evidence is in."""
+    bad = [x for x in tm["threats"] if x["status"] == "contradicted" and x["gating"]]
+    if not bad:
+        return
+    keys = {(x["sid"], x["target"]) for x in bad}
+    for f in raw:
+        if f.get("stage") == "threat-model" and (f.get("id"), (f.get("title") or "").rsplit(" — ", 1)[-1]) in keys:
+            f["gating"] = True
+    (Path(reports) / "findings.json").write_text(json.dumps(raw, indent=1))
+    for s in stages:
+        if s["stage"] == "threat-model" and s.get("tool") == "OWASP pytm" and s["status"] in ("passed", "failed"):
+            s["status"] = "failed"
+            s["findings"] = (s.get("findings") or "") + f" · {len(bad)} mitigation(s) contradicted by scanner evidence"
+
+
 def render_outputs(reports, summary):
     """Write summary.json/.md, junit.xml and the PDF for a finished (or merged) scan.
     Exit code: 0 = all gates passed or report-only mode, 1 = a gate failed, 2 = scanner error."""
     reports = Path(reports)
     stages = summary["stages"]
     enforce = summary.get("enforce", True)
+    tm = None
+    if not summary.get("only"):   # the threat model needs every scanner's evidence: whole runs only
+        raw = load_json(reports / "findings.json") or []
+        tm = threat_analysis(reports, F.consolidate([dict(f) for f in raw]))
+        if tm:
+            regate_contradicted(tm, stages, raw, reports)
     failed = [s for s in stages if s["status"] == "failed" and s.get("gate", True)]
     errors = [s for s in stages if s["status"] == "error"]
     summary["passed"] = not failed and not errors
@@ -1789,6 +1849,16 @@ def render_outputs(reports, summary):
         fs["overdue"] = summary["trend"]["overdue"]
         (reports / "findings-consolidated.json").write_text(json.dumps(merged, indent=1))
     summary["findings"] = fs
+    if not summary.get("only"):
+        if tm:
+            summary["threat_model"] = {k: tm[k] for k in ("counts", "total", "gating", "by_stride")}
+            summary["threat_model"]["gaps"] = [g["title"] for g in tm["gaps"]]
+            c = tm["counts"]
+            md += ["", f"**Threat model:** {tm['total']} threats · 🔴 {c['confirmed']} confirmed exploitable · "
+                       f"🟠 {c['in-code']} found in code · {c['theoretical']} theoretical · "
+                       f"✅ {c['mitigated'] + c['accepted'] + c['transferred']} decided"
+                       + (f" · ⚠️ {c['contradicted']} mitigation(s) contradicted by evidence" if c["contradicted"] else "")
+                       + (f" · model gaps: {', '.join(g['title'] for g in tm['gaps'])}" if tm["gaps"] else "")]
     if fs["unique"]:
         line = (f"**Findings:** {fs['unique']} unique ({fs['duplicates_merged']} duplicates across tools merged) · "
                 f"{fs['blocking']} blocking · {fs['kev']} known-exploited (KEV) · {fs['baselined']} accepted in baseline")
