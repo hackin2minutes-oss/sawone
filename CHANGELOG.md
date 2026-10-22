@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.1 — Fixes from the first real runs
+
+- Scans no longer fail at "validate inputs" on pushes (the plan step's last command returned 1 when
+  there was no base commit).
+- Nuclei: when the technology-filtered scan (`-as`) cannot run because templates are not installed
+  yet, Sawone runs Nuclei with every template instead of reporting a scanner error.
+
 ## 1.0.0 — Sawone
 
 First release under the Sawone name, built on SawanB DevSecOps 2.0.2 (its history is below).

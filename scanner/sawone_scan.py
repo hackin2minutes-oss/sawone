@@ -1282,13 +1282,19 @@ class Scan:
         if d.get("nuclei", True) and not self.skipped("nuclei"):
             sarif = self.reports / "sarif" / "nuclei.sarif"
             jsonl = self.reports / "raw" / "nuclei.jsonl"
-            tech = ["-as"] if d.get("nuclei_mode", "auto") == "auto" else []   # templates for the detected stack only
-            code, _ = self.docker("nuclei", ["-u", base, *tech, "-severity", "medium,high,critical", "-silent",
-                                             "-disable-update-check", "-sarif-export", str(sarif),
-                                             "-jsonl-export", str(jsonl)], "nuclei",
-                                  extra=["--network", self.network, *self.cache_mount("nuclei", "/root")])
+            def nuclei(tech, log_name):
+                return self.docker("nuclei", ["-u", base, *tech, "-severity", "medium,high,critical", "-silent",
+                                              "-disable-update-check", "-sarif-export", str(sarif),
+                                              "-jsonl-export", str(jsonl)], log_name,
+                                   extra=["--network", self.network, *self.cache_mount("nuclei", "/root")])[0]
+            auto = d.get("nuclei_mode", "auto") == "auto"
+            code, run_log = nuclei(["-as"] if auto else [], "nuclei"), "nuclei"   # -as: detected stack only
+            if auto and code != 0 and not sarif.exists():
+                # -as needs templates already installed and never fetches them; a plain run installs them
+                log(f"Nuclei technology-filtered scan failed ({self.last_error('nuclei')}); running every template")
+                code, run_log = nuclei([], "nuclei-all"), "nuclei-all"
             if code != 0 and not sarif.exists():
-                self.record("dast", "Nuclei", "error", self.last_error("nuclei"))
+                self.record("dast", "Nuclei", "error", self.last_error(run_log))
             else:
                 self.sarif_tag(sarif, "nuclei")
                 items = []

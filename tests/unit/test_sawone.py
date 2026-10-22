@@ -201,3 +201,26 @@ def test_dashboard_summarises_every_repository(tmp_path):
     page = (out / "index.html").read_text()
     assert "acme/api" in page and "acme/web" in page and "NCA CSCC-1:2019" in page
     assert set(json.loads(hist.read_text())) == {"acme/api", "acme/web"}
+
+
+# ------------------------------------------------------------------ Nuclei
+def test_nuclei_falls_back_to_every_template_when_the_tech_filter_cannot_run(tmp_path, monkeypatch):
+    s = make_scan(tmp_path, FIX / "python-flask", {"dast": {"full_scan": False, "openapi": None}})
+    wrk = tmp_path / "zap"
+    wrk.mkdir()
+    monkeypatch.setattr(s, "ensure_app", lambda *a, **k: {"base": "http://app:8080"})
+    monkeypatch.setattr(s, "_zap_dir", lambda: wrk)
+    monkeypatch.setattr(s, "prepare_auth", lambda base: True)
+    monkeypatch.setattr(s, "_zap_gate", lambda *a, **k: None)
+    monkeypatch.setattr(ds.shutil, "copy", lambda *a, **k: None)
+
+    def plain(cmd):
+        Path(s.reports / "sarif" / "nuclei.sarif").write_text('{"runs": []}')
+    s.run = FakeRun(s, [
+        (lambda c: "nuclei" in " ".join(map(str, c)) and "-as" in c, 1, '[FTL] no templates found in path "/root/nuclei-templates"', None),
+        (lambda c: "nuclei" in " ".join(map(str, c)) and "-u" in c, 0, "", plain),
+    ])
+    s.scan_dast()
+    runs = [c for c in s.run.calls if "-u" in c and any("nuclei" in str(x) for x in c)]
+    assert len(runs) == 2 and "-as" in runs[0] and "-as" not in runs[1]
+    assert not any(r["tool"] == "Nuclei" and r["status"] == "error" for r in s.stages), s.stages
