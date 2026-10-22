@@ -1,0 +1,19 @@
+# .github/workflows/sawone.yml in your application repository — the minimum.
+# Every pull request and push to main is scanned; nothing is published.
+# Replace <commit-sha> with the commit of the sawone release you trust (pin by SHA).
+name: sawone
+
+on:
+  pull_request:
+  push:
+    branches: [main] # also builds the base-branch report that PRs are compared with
+
+permissions: {}
+
+jobs:
+  scan:
+    permissions:
+      contents: read
+      actions: read # code scanning upload, and reading the base branch's last report
+      security-events: write # code scanning upload
+    uses: hackin2minutes-oss/sawone/.github/workflows/sawone-scan.yml@<commit-sha> # v1.0.0

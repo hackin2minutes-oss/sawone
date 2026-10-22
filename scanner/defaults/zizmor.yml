@@ -1,0 +1,17 @@
+# zizmor policy for this repo's workflows.
+# Tag pins are accepted for these well-known, high-trust publishers; anything
+# else must be pinned to a full commit SHA. For SHA pins everywhere, let
+# Renovate's "helpers:pinGitHubActionDigests" preset rewrite the tags (see renovate.json).
+rules:
+  unpinned-uses:
+    config:
+      policies:
+        actions/*: ref-pin
+        github/*: ref-pin
+        docker/*: ref-pin
+        sigstore/*: ref-pin
+        azure/*: ref-pin
+        # The SLSA generator verifies its own tag at runtime and must NOT be SHA-pinned
+        slsa-framework/slsa-github-generator/*: ref-pin
+        ossf/*: ref-pin
+        "*": hash-pin

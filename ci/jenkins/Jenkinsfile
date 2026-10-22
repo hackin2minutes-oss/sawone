@@ -1,0 +1,30 @@
+// Jenkins — add this stage to any pipeline (agent needs Docker).
+// Optional environment: SCAN_SEVERITY, SCAN_ENFORCE, SCAN_DAST, SCAN_SKIP,
+// SCAN_BASELINE, SCAN_BLOCK_KEV, SCAN_EPSS_THRESHOLD,
+// DEFECTDOJO_URL + credential 'defectdojo-token'.
+pipeline {
+  agent any
+  environment {
+    SAWONE_IMAGE = 'ghcr.io/hackin2minutes-oss/sawone-scanner:1'
+  }
+  stages {
+    stage('Sawone scan') {
+      steps {
+        script {
+          def code = sh(returnStatus: true, script: '''
+            docker run --rm \
+              -v /var/run/docker.sock:/var/run/docker.sock \
+              -v "$WORKSPACE:$WORKSPACE" -w "$WORKSPACE" \
+              -e SCAN_SEVERITY -e SCAN_ENFORCE -e SCAN_DAST -e SCAN_SKIP -e SCAN_BASELINE -e SCAN_BLOCK_KEV -e SCAN_EPSS_THRESHOLD -e DEFECTDOJO_URL -e DEFECTDOJO_TOKEN \
+              -e REPO="$JOB_NAME" -e SHA="$GIT_COMMIT" -e REF="$BRANCH_NAME" -e RUN_URL="$BUILD_URL" \
+              "$SAWONE_IMAGE" --path "$WORKSPACE"
+          ''')
+          junit allowEmptyResults: true, testResults: 'sawone-reports/junit.xml'
+          archiveArtifacts artifacts: 'sawone-reports/**', allowEmptyArchive: true
+          if (code == 1) { error('Security gates failed: see sawone-reports/security-report.pdf') }
+          if (code > 1)  { error("Scanner error (exit ${code}): see sawone-reports/logs") }
+        }
+      }
+    }
+  }
+}

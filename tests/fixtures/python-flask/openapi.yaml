@@ -1,0 +1,14 @@
+openapi: 3.0.3
+info: { title: Vulnerable fixture API, version: "1.0" }
+servers: [ { url: "http://app:8080" } ]
+paths:
+  /health:
+    get: { responses: { "200": { description: ok } } }
+  /user:
+    get:
+      parameters: [ { name: name, in: query, required: true, schema: { type: string, example: alice } } ]
+      responses: { "200": { description: users } }
+  /ping:
+    get:
+      parameters: [ { name: host, in: query, required: true, schema: { type: string, example: 127.0.0.1 } } ]
+      responses: { "200": { description: ping output } }

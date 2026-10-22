@@ -1,0 +1,344 @@
+# Reusable release pipeline: publish → sign → SBOM attestation → SLSA provenance → approved deploy.
+# Call it after sawone-scan.yml, on trusted pushes only:
+#
+#   jobs:
+#     scan:
+#       permissions: { contents: read, actions: read, security-events: write }
+#       uses: hackin2minutes-oss/sawone/.github/workflows/sawone-scan.yml@<commit-sha>
+#     release:
+#       needs: scan
+#       if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+#       permissions: { contents: read, actions: read, packages: write, id-token: write }
+#       uses: hackin2minutes-oss/sawone/.github/workflows/sawone-release.yml@<commit-sha>
+#       with:
+#         artifact-prefix: ${{ needs.scan.outputs.artifact-prefix }}
+#         image-id: ${{ needs.scan.outputs.image-id }}
+#         local-tag: ${{ needs.scan.outputs.local-tag }}
+#         scan-passed: ${{ needs.scan.outputs.passed }}
+#
+# It publishes the exact image the scan built and attacked (taken from the scan's artifact and
+# checked by image ID), never a rebuild. It refuses to publish from anything but a push to
+# release-branch, and refuses to publish an image whose scan did not pass.
+name: sawone-release
+
+on:
+  workflow_call:
+    inputs:
+      artifact-prefix:
+        description: The scan's artifact-prefix (output of sawone-scan.yml)
+        type: string
+        required: true
+      image-id:
+        description: The scan's image-id output
+        type: string
+        required: true
+      local-tag:
+        description: The scan's local-tag output
+        type: string
+        required: true
+      scan-passed:
+        description: The scan's passed output ('true' when every gate passed and nothing errored)
+        type: string
+        required: true
+      require-scan-pass:
+        description: Refuse to publish when the scan did not pass (turn off only for self-tests)
+        type: boolean
+        default: true
+      image-name:
+        description: Image to publish without tag ('' = ghcr.io/<owner>/<repo>)
+        type: string
+        default: ""
+      release-branch:
+        type: string
+        default: main
+      enable-provenance:
+        description: Generate SLSA level 3 provenance
+        type: boolean
+        default: true
+      enable-production-deploy:
+        type: boolean
+        default: false
+      deploy-environment:
+        description: GitHub environment for the deploy job (put required reviewers on it)
+        type: string
+        default: production
+      deploy-command:
+        description: Shell command that deploys $IMAGE_REF (runs after the signature and attestation verify)
+        type: string
+        default: ""
+      runs-on:
+        type: string
+        default: ubuntu-24.04
+    secrets:
+      deploy-token:
+        description: Exposed to deploy-command as $DEPLOY_TOKEN
+        required: false
+    outputs:
+      image:
+        value: ${{ jobs.publish.outputs.image }}
+      digest:
+        value: ${{ jobs.publish.outputs.digest }}
+
+permissions: {}
+
+jobs:
+  check:
+    name: release preconditions
+    runs-on: ${{ inputs.runs-on }}
+    permissions: {}
+    outputs:
+      image-name: ${{ steps.check.outputs.image-name }}
+      deploy: ${{ steps.check.outputs.deploy }}
+    steps:
+      - name: Check event, scan result and inputs
+        id: check
+        env:
+          EVENT: ${{ github.event_name }}
+          RELEASE_BRANCH: ${{ inputs.release-branch }}
+          IMAGE_ID: ${{ inputs.image-id }}
+          LOCAL_TAG: ${{ inputs.local-tag }}
+          PREFIX: ${{ inputs.artifact-prefix }}
+          SCAN_PASSED: ${{ inputs.scan-passed }}
+          REQUIRE_PASS: ${{ inputs.require-scan-pass }}
+          IN_IMAGE_NAME: ${{ inputs.image-name }}
+          DEPLOY: ${{ inputs.enable-production-deploy }}
+          DEPLOY_CMD: ${{ inputs.deploy-command }}
+          DEPLOY_ENV: ${{ inputs.deploy-environment }}
+        run: |
+          set -euo pipefail
+          errors=0
+          fail() { echo "::error title=devsecops release::$1"; errors=$((errors + 1)); }
+          # never publish from pull requests or other branches, even if the caller forgot its `if:`
+          if [ "$EVENT" != push ] || [ "$GITHUB_REF" != "refs/heads/$RELEASE_BRANCH" ]; then
+            fail "releases run only on pushes to $RELEASE_BRANCH (this is $EVENT on $GITHUB_REF)"
+          fi
+          [[ "$IMAGE_ID" == sha256:* ]] || fail "image-id is empty: the scan built no image (no Dockerfile, or enable-container false)"
+          [ -n "$LOCAL_TAG" ] || fail "local-tag is empty"
+          [[ "$PREFIX" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,40}$ ]] || fail "artifact-prefix is invalid"
+          if [ "$SCAN_PASSED" != true ]; then
+            if [ "$REQUIRE_PASS" = true ]; then fail "the scan did not pass (passed=$SCAN_PASSED): refusing to publish"
+            else echo "::warning::publishing although the scan did not pass (require-scan-pass is off)"; fi
+          fi
+          image_name="${IN_IMAGE_NAME:-ghcr.io/$GITHUB_REPOSITORY}"
+          image_name="$(echo "$image_name" | tr '[:upper:]' '[:lower:]')"
+          image_re='^ghcr\.io(/[a-z0-9._-]+)+$'
+          [[ "$image_name" =~ $image_re ]] || fail "image-name '$image_name' must be a GHCR image without tag (ghcr.io/owner/name)"
+          deploy=false
+          if [ "$DEPLOY" = true ]; then
+            [ -n "$DEPLOY_CMD" ] || fail "enable-production-deploy needs deploy-command"
+            [ -n "$DEPLOY_ENV" ] || fail "enable-production-deploy needs deploy-environment"
+            [ "$SCAN_PASSED" = true ] || fail "deployment needs a passing scan, whatever require-scan-pass says"
+            deploy=true
+          fi
+          [ "$errors" -eq 0 ] || exit 1
+          echo "image-name=$image_name" >> "$GITHUB_OUTPUT"
+          echo "deploy=$deploy" >> "$GITHUB_OUTPUT"
+
+  publish:
+    name: publish, sign, attest
+    needs: check
+    runs-on: ${{ inputs.runs-on }}
+    permissions:
+      contents: read
+      packages: write # push to GHCR
+      id-token: write # keyless signing
+    outputs:
+      image: ${{ steps.push.outputs.image }}
+      digest: ${{ steps.push.outputs.digest }}
+      signed: ${{ steps.sign.outputs.signed }}
+      attested: ${{ steps.sign.outputs.attested }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ inputs.artifact-prefix }}-app-image
+          path: ${{ runner.temp }}/app-image
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ inputs.artifact-prefix }}-part-container
+          path: ${{ runner.temp }}/container-part
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Push the exact image that was scanned
+        id: push
+        env:
+          EXPECT_ID: ${{ inputs.image-id }}
+          TAG: ${{ inputs.local-tag }}
+          IMAGE: ${{ needs.check.outputs.image-name }}
+        run: |
+          set -euo pipefail
+          docker load -q -i "$RUNNER_TEMP/app-image/image.tar"
+          [ "$(docker image inspect --format '{{.Id}}' "$TAG")" = "$EXPECT_ID" ] || { echo "::error::image changed since it was scanned"; exit 1; }
+          docker tag "$TAG" "$IMAGE:$GITHUB_SHA"
+          docker push -q "$IMAGE:$GITHUB_SHA"
+          digest="$(docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$IMAGE:$GITHUB_SHA" | grep -F "$IMAGE@" | head -1 | cut -d@ -f2)"
+          [[ "$digest" == sha256:* ]] || { echo "::error::no registry digest for $IMAGE:$GITHUB_SHA"; exit 1; }
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+      - name: Sign and attest the SBOM
+        id: sign
+        env:
+          REF: ${{ steps.push.outputs.image }}@${{ steps.push.outputs.digest }}
+          IDENTITY: ^${{ github.server_url }}/.+/\.github/workflows/sawone-release\.yml@
+        run: |
+          set -euo pipefail
+          cosign sign --yes "$REF"
+          echo "signed=yes (cosign keyless)" >> "$GITHUB_OUTPUT"
+          sbom="$(find "$RUNNER_TEMP/container-part/raw" -name 'sbom-*.cdx.json' | head -1)"
+          if [ -z "$sbom" ]; then
+            echo "::error::no SBOM in the container report: refusing to release an image without one"; exit 1
+          fi
+          cosign attest --yes --type cyclonedx --predicate "$sbom" "$REF"
+          echo "attested=yes (CycloneDX SBOM)" >> "$GITHUB_OUTPUT"
+          # verify what was just produced, bound to this repository
+          cosign verify "$REF" --certificate-identity-regexp "$IDENTITY" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            --certificate-github-workflow-repository "$GITHUB_REPOSITORY" > /dev/null
+
+  provenance:
+    name: SLSA provenance
+    needs: publish
+    if: inputs.enable-provenance
+    permissions:
+      actions: read # read the workflow run
+      id-token: write # sign the provenance
+      packages: write # attach it to the image
+    # SLSA's builder must be referenced by tag, not commit SHA (it verifies its own ref)
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_container_slsa3.yml@v2.1.0 # zizmor: ignore[unpinned-uses]
+    with:
+      image: ${{ needs.publish.outputs.image }}
+      digest: ${{ needs.publish.outputs.digest }}
+      registry-username: ${{ github.actor }}
+    secrets:
+      registry-password: ${{ secrets.GITHUB_TOKEN }}
+
+  deploy:
+    name: deploy
+    needs: [check, publish, provenance]
+    if: >-
+      !cancelled() && needs.check.outputs.deploy == 'true' && needs.publish.result == 'success' &&
+      (needs.provenance.result == 'success' || needs.provenance.result == 'skipped')
+    runs-on: ${{ inputs.runs-on }}
+    environment: ${{ inputs.deploy-environment }}
+    permissions:
+      contents: read
+      packages: read # verify signatures on private images
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Verify signature and SBOM attestation
+        env:
+          IMAGE_REF: ${{ needs.publish.outputs.image }}@${{ needs.publish.outputs.digest }}
+          IDENTITY: ^${{ github.server_url }}/.+/\.github/workflows/sawone-release\.yml@
+        run: |
+          set -euo pipefail
+          common=(--certificate-identity-regexp "$IDENTITY" --certificate-oidc-issuer https://token.actions.githubusercontent.com
+                  --certificate-github-workflow-repository "$GITHUB_REPOSITORY")
+          cosign verify "$IMAGE_REF" "${common[@]}" > /dev/null
+          cosign verify-attestation --type cyclonedx "$IMAGE_REF" "${common[@]}" > /dev/null
+          echo "verified $IMAGE_REF"
+      - name: Deploy
+        env:
+          IMAGE: ${{ needs.publish.outputs.image }}
+          DIGEST: ${{ needs.publish.outputs.digest }}
+          IMAGE_REF: ${{ needs.publish.outputs.image }}@${{ needs.publish.outputs.digest }}
+          DEPLOY_COMMAND: ${{ inputs.deploy-command }}
+          DEPLOY_TOKEN: ${{ secrets.deploy-token }}
+        run: bash -euo pipefail -c "$DEPLOY_COMMAND"
+
+  evidence:
+    # Sign the scan's evidence manifest (SHA-256 of every report file) so an auditor can prove the report,
+    # SARIF and logs are exactly what this pipeline produced. Runs even when the scan failed: a failed
+    # assessment is still evidence. Same trust rule as publishing: pushes to the release branch only.
+    name: sign audit evidence
+    if: github.event_name == 'push' && github.ref == format('refs/heads/{0}', inputs.release-branch)
+    runs-on: ${{ inputs.runs-on }}
+    permissions:
+      contents: read
+      id-token: write # keyless signing of the evidence manifest
+    outputs:
+      signed: ${{ steps.sign.outputs.signed }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ inputs.artifact-prefix }}-report
+          path: ${{ runner.temp }}/report
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - name: Verify and sign the evidence manifest
+        id: sign
+        env:
+          IDENTITY: ^${{ github.server_url }}/.+/\.github/workflows/sawone-release\.yml@
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/report"
+          [ -f evidence/manifest.sha256 ] || { echo "::error::the report has no evidence/manifest.sha256 (scanner older than Sawone 1.0)"; exit 1; }
+          sha256sum --quiet -c evidence/manifest.sha256   # every file is what the scan wrote
+          cosign sign-blob --yes --bundle evidence/manifest.sha256.sigstore.json evidence/manifest.sha256 > /dev/null
+          cosign verify-blob --bundle evidence/manifest.sha256.sigstore.json \
+            --certificate-identity-regexp "$IDENTITY" --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            evidence/manifest.sha256
+          echo "signed=yes" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Audit evidence signed"
+            echo "Verify a downloaded report with:"
+            echo '```'
+            echo "sha256sum -c evidence/manifest.sha256"
+            echo "cosign verify-blob --bundle evidence/manifest.sha256.sigstore.json \\"
+            echo "  --certificate-identity-regexp '$IDENTITY' \\"
+            echo "  --certificate-oidc-issuer https://token.actions.githubusercontent.com evidence/manifest.sha256"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ inputs.artifact-prefix }}-evidence-signed
+          path: ${{ runner.temp }}/report
+          retention-days: 90
+          if-no-files-found: error
+
+  summary:
+    name: release facts
+    needs: [check, publish, provenance, deploy, evidence]
+    if: always()
+    runs-on: ${{ inputs.runs-on }}
+    permissions: {}
+    steps:
+      - name: Write release facts
+        env:
+          IMAGE: ${{ needs.publish.outputs.image }}
+          DIGEST: ${{ needs.publish.outputs.digest }}
+          SIGNED: ${{ needs.publish.outputs.signed || 'no' }}
+          ATTESTED: ${{ needs.publish.outputs.attested || 'no' }}
+          R_CHECK: ${{ needs.check.result }}
+          R_PUBLISH: ${{ needs.publish.result }}
+          R_PROVENANCE: ${{ needs.provenance.result }}
+          R_DEPLOY: ${{ needs.deploy.result }}
+          R_EVIDENCE: ${{ needs.evidence.outputs.signed || needs.evidence.result }}
+          SCAN_PASSED: ${{ inputs.scan-passed }}
+        run: |
+          {
+            echo "### Release"
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Scan passed | $SCAN_PASSED |"
+            echo "| Preconditions | $R_CHECK |"
+            echo "| Image | ${IMAGE:-not published}${DIGEST:+@$DIGEST} |"
+            echo "| Published | $R_PUBLISH |"
+            echo "| Signed | $SIGNED |"
+            echo "| SBOM attestation | $ATTESTED |"
+            echo "| SLSA provenance | $R_PROVENANCE |"
+            echo "| Deployment | $R_DEPLOY |"
+            echo "| Audit evidence signed | $R_EVIDENCE |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          case "$R_CHECK/$R_PUBLISH/$R_PROVENANCE/$R_DEPLOY" in
+            *failure*|*cancelled*) echo "::error::release incomplete"; exit 1 ;;
+          esac

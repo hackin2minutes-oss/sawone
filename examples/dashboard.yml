@@ -1,0 +1,30 @@
+# .github/workflows/sawone-dashboard.yml — one security-posture page for every repository that runs Sawone.
+# Put this in a central repository (for example my-org/security). It reads each repository's newest
+# sawone-report artefact, keeps a history for trend lines, and publishes the page to GitHub Pages.
+# Needs a fine-grained token (secret SAWONE_READ_TOKEN) with "Actions: read" on the listed repositories,
+# and the repository's Pages source set to "GitHub Actions". Keep that repository (and its Pages site) private.
+name: sawone-dashboard
+
+on:
+  schedule:
+    - cron: "17 5 * * *"   # daily, after the nightly scans
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  dashboard:
+    permissions:
+      contents: read
+      actions: read
+      pages: write
+      id-token: write
+    uses: hackin2minutes-oss/sawone/.github/workflows/sawone-dashboard.yml@<commit-sha> # v1.0.0
+    with:
+      title: Security posture
+      repositories: |
+        hackin2minutes-oss/mywife
+        my-org/payments-api
+      publish-pages: true
+    secrets:
+      read-token: ${{ secrets.SAWONE_READ_TOKEN }}

@@ -1,0 +1,82 @@
+# .github/workflows/sawone.yml — the full lifecycle:
+#   scan     (read-only; every PR and push)   gates → build → attack → report → DefectDojo
+#   comment  (PRs)                            one comment with new vs fixed findings
+#   release  (pushes to main only)            publish → sign → SBOM attest → SLSA → approved deploy
+#
+# One-time setup in your repository:
+#   Settings → Environments → production → Required reviewers (the approval gate)
+#   Settings → Secrets → DEFECTDOJO_TOKEN, DEPLOY_TOKEN
+#   .sawone-baseline.yml for accepted risks (see README: "Adopting on an existing repository")
+name: sawone
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "17 3 * * 1" # weekly deep rescan: new CVEs appear without code changes
+  workflow_dispatch:
+
+concurrency:
+  group: sawone-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions: {}
+
+jobs:
+  scan:
+    permissions:
+      contents: read
+      actions: read # code scanning upload; base-branch report for PR comparison
+      security-events: write # code scanning upload
+    uses: hackin2minutes-oss/sawone/.github/workflows/sawone-scan.yml@<commit-sha> # v1.0.0
+    with:
+      path: .
+      dockerfile: app/Dockerfile
+      build-context: app
+      app-port: 8080
+      health-path: /health
+      startup-timeout: 90
+      gate-severity: HIGH,CRITICAL
+      scan-depth: auto # PRs fast, pushes and schedules deep
+      pr-gate: new # PRs fail only on findings they introduce
+      incremental: auto # PRs scan only the change
+      report-languages: en,ar # PDF in English and Arabic
+      block-kev: true # known-exploited CVEs block at any severity
+      epss-threshold: "0.5" # and so do CVEs with a ≥ 50% exploit probability
+      tool-version-policy: latest # or bundled / file (+ tools-lock-file)
+      enable-defectdojo: true
+      defectdojo-url: https://defectdojo.example.com
+    secrets:
+      defectdojo-token: ${{ secrets.DEFECTDOJO_TOKEN }}
+
+  comment:
+    needs: scan
+    if: always() && github.event_name == 'pull_request'
+    permissions:
+      pull-requests: write # one comment per PR, updated on every push
+    uses: hackin2minutes-oss/sawone/.github/workflows/sawone-pr-comment.yml@<commit-sha> # v1.0.0
+    with:
+      artifact-prefix: ${{ needs.scan.outputs.artifact-prefix }}
+
+  release:
+    needs: scan
+    # only trusted pushes; the release workflow also refuses anything else on its own
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      actions: read # SLSA generator reads the run
+      packages: write # push to GHCR
+      id-token: write # keyless signing and provenance
+    uses: hackin2minutes-oss/sawone/.github/workflows/sawone-release.yml@<commit-sha> # v1.0.0
+    with:
+      artifact-prefix: ${{ needs.scan.outputs.artifact-prefix }}
+      image-id: ${{ needs.scan.outputs.image-id }}
+      local-tag: ${{ needs.scan.outputs.local-tag }}
+      scan-passed: ${{ needs.scan.outputs.passed }}
+      enable-production-deploy: true
+      deploy-environment: production
+      deploy-command: |
+        kubectl set image deployment/app app="$IMAGE_REF"
+    secrets:
+      deploy-token: ${{ secrets.DEPLOY_TOKEN }}

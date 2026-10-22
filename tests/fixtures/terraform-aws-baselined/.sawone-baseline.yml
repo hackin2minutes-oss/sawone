@@ -1,0 +1,8 @@
+# Self-test: the same planted Terraform flaws as tests/fixtures/terraform-aws, all accepted here,
+# so the IaC gate must PASS and report them as accepted in the baseline.
+exceptions:
+  - id: "*"
+    path: "main.tf*"
+    reason: Self-test fixture — accepted to prove baseline suppression end to end
+    owner: sawone-selftest
+    expires: 2099-12-31

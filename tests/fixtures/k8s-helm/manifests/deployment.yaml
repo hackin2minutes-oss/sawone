@@ -1,0 +1,13 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: fixture }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: fixture } }
+  template:
+    metadata: { labels: { app: fixture } }
+    spec:
+      containers:
+        - name: app
+          image: nginx:latest
+          securityContext: { privileged: true }

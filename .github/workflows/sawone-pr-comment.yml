@@ -1,0 +1,67 @@
+# Reusable: post (or update) one Sawone comment on the pull request.
+# Separate from sawone-scan.yml so only callers who want comments grant pull-requests: write.
+#
+#   comment:
+#     needs: scan
+#     if: always() && github.event_name == 'pull_request'
+#     permissions: { pull-requests: write }
+#     uses: hackin2minutes-oss/sawone/.github/workflows/sawone-pr-comment.yml@<commit-sha>
+#     with:
+#       artifact-prefix: ${{ needs.scan.outputs.artifact-prefix }}
+#
+# Fork pull requests are skipped: their token cannot write comments.
+name: sawone-pr-comment
+
+on:
+  workflow_call:
+    inputs:
+      artifact-prefix:
+        description: The scan's artifact-prefix output
+        type: string
+        default: sawone
+      runs-on:
+        type: string
+        default: ubuntu-24.04
+
+permissions: {}
+
+jobs:
+  comment:
+    name: PR comment
+    if: >-
+      github.event.pull_request != null &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ${{ inputs.runs-on }}
+    permissions:
+      pull-requests: write # create or update the one Sawone comment
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ inputs.artifact-prefix }}-report
+          path: ${{ runner.temp }}/report
+      - name: Post or update the comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          PREFIX: ${{ inputs.artifact-prefix }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          marker="<!-- sawone:$PREFIX -->"
+          body="$RUNNER_TEMP/comment.md"
+          {
+            echo "$marker"
+            # GitHub caps comments at 65536 characters; the full report is in the run's artifacts
+            head -c 60000 "$RUNNER_TEMP/report/summary.md"
+            echo
+            echo "<sub>[Full run and PDF report]($RUN_URL) · updated for commit ${GITHUB_SHA:0:7}</sub>"
+          } > "$body"
+          id="$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --paginate \
+                --jq ".[] | select(.body | startswith(\"$marker\")) | .id" | head -1)"
+          if [ -n "$id" ]; then
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$id" -F "body=@$body" > /dev/null
+            echo "updated comment $id"
+          else
+            gh api -X POST "repos/$GITHUB_REPOSITORY/issues/$PR/comments" -F "body=@$body" > /dev/null
+            echo "created comment"
+          fi

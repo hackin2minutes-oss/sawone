@@ -1,0 +1,88 @@
+# Sawone — which controls each pipeline stage produces evidence for.
+#
+# This is an evidence map, not a compliance attestation: a passing stage shows the control's
+# technical check ran and found nothing blocking; the control usually also needs process and
+# governance evidence that a pipeline cannot produce.
+#
+# Sources (identifiers as published):
+#   OWASP ASVS 4.0.3            https://owasp.org/www-project-application-security-verification-standard/
+#   NIST SP 800-218 SSDF v1.1   https://csrc.nist.gov/pubs/sp/800/218/final
+#   NCA ECC-2:2024 (Saudi NCA)  https://nca.gov.sa  — 1-6 Cybersecurity in IT project management,
+#                               2-10 Vulnerabilities management, 2-15 Web application security
+#   SAMA Cyber Security Framework v1.0 — 3.3.6 Application Security, 3.3.7 Change Management,
+#                               3.3.8 Infrastructure Security, 3.3.17 Vulnerability Management
+#   NCA CSCC-1:2019 (Critical Systems Cybersecurity Controls) https://nca.gov.sa/en/regulatory-documents/controls-list/cscc/
+#                               1-3-2 cybersecurity in IT projects, 2-3-1 configuration and hardening,
+#                               2-7-1 cryptography, 2-9-1 vulnerabilities management, 2-12-1 web application security
+#   NCA CCC-2:2024 (Cloud Cybersecurity Controls) — tenant (T) and provider (P) controls are labelled;
+#                               2-9-T-1-1 applies to every cloud tenant, the P controls only to cloud service providers
+#   Saudi PDPL (Personal Data Protection Law) — Art. 19, technical measures to protect personal data
+frameworks:
+  asvs: OWASP ASVS 4.0.3
+  ssdf: NIST SSDF (SP 800-218)
+  ecc: NCA ECC-2:2024
+  sama: SAMA CSF
+  cscc: NCA CSCC-1:2019
+  ccc: NCA CCC-2:2024
+  pdpl: Saudi PDPL
+
+controls:
+  # ---------------------------------------------------------------- OWASP ASVS 4.0.3
+  - {framework: asvs, id: "V1.1.2", title: "Threat modeling for every design change", title_ar: "نمذجة التهديدات لكل تغيير في التصميم", stages: [threat-model]}
+  - {framework: asvs, id: "V2.10.4", title: "No passwords, keys or secrets in source code", title_ar: "عدم وجود كلمات مرور أو مفاتيح أو أسرار في الشيفرة المصدرية", stages: [secrets]}
+  - {framework: asvs, id: "V5.3", title: "Output encoding and injection prevention", title_ar: "ترميز المخرجات ومنع الحقن", stages: [sast, dast]}
+  - {framework: asvs, id: "V5.5", title: "Deserialization prevention", title_ar: "منع إلغاء التسلسل غير الآمن", stages: [sast]}
+  - {framework: asvs, id: "V14.1.1", title: "Secure, repeatable, automated build and deployment", title_ar: "بناء ونشر آمن وقابل للتكرار ومؤتمت", stages: [cicd]}
+  - {framework: asvs, id: "V14.1.3", title: "Server and platform configuration hardened", title_ar: "تحصين إعدادات الخادم والمنصة", stages: [iac, kubernetes, container]}
+  - {framework: asvs, id: "V14.2.1", title: "All components up to date", title_ar: "تحديث جميع المكونات", stages: [sca, container]}
+  - {framework: asvs, id: "V14.4", title: "HTTP security headers", title_ar: "ترويسات أمان HTTP", stages: [dast]}
+
+  # ---------------------------------------------------------------- NIST SSDF
+  - {framework: ssdf, id: "PO.3.2", title: "Secure the toolchain", title_ar: "تأمين سلسلة الأدوات", stages: [cicd]}
+  - {framework: ssdf, id: "PW.1.1", title: "Risk modeling (threat modeling) of the design", title_ar: "نمذجة مخاطر (تهديدات) التصميم", stages: [threat-model]}
+  - {framework: ssdf, id: "PW.4.4", title: "Verify third-party components meet requirements", title_ar: "التحقق من استيفاء مكونات الأطراف الخارجية للمتطلبات", stages: [sca, licences, container]}
+  - {framework: ssdf, id: "PW.5.1", title: "Follow secure coding practices", title_ar: "اتباع ممارسات البرمجة الآمنة", stages: [secrets, sast]}
+  - {framework: ssdf, id: "PW.7.2", title: "Review and analyse code for vulnerabilities", title_ar: "مراجعة الشيفرة وتحليلها بحثاً عن الثغرات", stages: [sast]}
+  - {framework: ssdf, id: "PW.8.2", title: "Test executable code for vulnerabilities", title_ar: "اختبار الشيفرة التنفيذية بحثاً عن الثغرات", stages: [dast, iast]}
+  - {framework: ssdf, id: "PW.9.1", title: "Secure-by-default configuration baseline", title_ar: "خط أساس لإعدادات آمنة افتراضياً", stages: [iac, kubernetes]}
+  - {framework: ssdf, id: "RV.1.1", title: "Gather vulnerability information continuously", title_ar: "جمع معلومات الثغرات باستمرار", stages: [sca, container, policy]}
+  - {framework: ssdf, id: "RV.2.1", title: "Analyse each vulnerability to plan remediation (risk-based)", title_ar: "تحليل كل ثغرة لتخطيط المعالجة (على أساس المخاطر)", stages: [policy]}
+
+  # ---------------------------------------------------------------- NCA ECC-2:2024
+  - {framework: ecc, id: "1-6-1", title: "Cybersecurity requirements in the project lifecycle", title_ar: "متطلبات الأمن السيبراني في دورة حياة المشاريع", stages: [threat-model]}
+  - {framework: ecc, id: "1-6-2-1", title: "Vulnerability assessment and remediation in changes", title_ar: "تقييم الثغرات ومعالجتها في التغييرات", stages: [sca, container]}
+  - {framework: ecc, id: "1-6-2-2", title: "Configuration review, hardening and patching before go-live", title_ar: "مراجعة الإعدادات والتحصين والتحديث قبل الإطلاق", stages: [iac, kubernetes, container]}
+  - {framework: ecc, id: "1-6-3-1", title: "Secure coding standards", title_ar: "معايير التطوير الآمن للبرمجيات", stages: [secrets, sast]}
+  - {framework: ecc, id: "1-6-3-2", title: "Trusted and licensed sources for libraries and tools", title_ar: "استخدام مصادر موثوقة ومرخصة للمكتبات والأدوات", stages: [sca, licences, cicd]}
+  - {framework: ecc, id: "1-6-3-3", title: "Testing software against security requirements", title_ar: "اختبار البرمجيات للتحقق من استيفائها متطلبات الأمن السيبراني", stages: [sast, dast, iast]}
+  - {framework: ecc, id: "1-6-3-5", title: "Configuration review and hardening before go-live", title_ar: "مراجعة الإعدادات والتحصين قبل الإطلاق", stages: [iac, kubernetes, cicd]}
+  - {framework: ecc, id: "2-10", title: "Vulnerabilities management", title_ar: "إدارة الثغرات", stages: [sca, container, policy]}
+  - {framework: ecc, id: "2-15", title: "Web application security (incl. web application firewall)", title_ar: "أمن تطبيقات الويب (بما في ذلك جدار حماية تطبيقات الويب)", stages: [dast, runtime]}
+
+  # ---------------------------------------------------------------- SAMA CSF
+  - {framework: sama, id: "3.3.6", title: "Application Security", title_ar: "أمن التطبيقات", stages: [threat-model, secrets, sast, dast, iast]}
+  - {framework: sama, id: "3.3.7", title: "Change Management", title_ar: "إدارة التغيير", stages: [cicd]}
+  - {framework: sama, id: "3.3.8", title: "Infrastructure Security", title_ar: "أمن البنية التحتية", stages: [iac, kubernetes, container, runtime]}
+  - {framework: sama, id: "3.3.17", title: "Vulnerability Management", title_ar: "إدارة الثغرات", stages: [sca, container, policy]}
+
+  # ---------------------------------------------------------------- NCA CSCC-1:2019 (critical systems)
+  - {framework: cscc, id: "1-3-2-1", title: "Security source code review before the critical system is released", title_ar: "مراجعة أمنية للشيفرة المصدرية قبل إطلاق النظام الحساس", stages: [sast, secrets]}
+  - {framework: cscc, id: "1-3-2-2", title: "Secure access, storage, documentation and release of source code", title_ar: "تأمين الوصول إلى الشيفرة المصدرية وتخزينها وتوثيقها وإصدارها", stages: [secrets, cicd]}
+  - {framework: cscc, id: "1-3-2-3", title: "Secure authenticated APIs", title_ar: "تأمين واجهات برمجة التطبيقات الموثقة", stages: [dast]}
+  - {framework: cscc, id: "2-3-1-6", title: "Review configurations and hardening of critical systems", title_ar: "مراجعة إعدادات الأنظمة الحساسة وتحصينها", stages: [iac, kubernetes, container]}
+  - {framework: cscc, id: "2-3-1-7", title: "Change default configurations; remove hard-coded, backdoor and default passwords", title_ar: "تغيير الإعدادات المصنعية وإزالة كلمات المرور المضمنة والخلفية والافتراضية", stages: [secrets, iac]}
+  - {framework: cscc, id: "2-7-1-3", title: "Use secure, up-to-date cryptographic methods and algorithms", title_ar: "استخدام طرق وخوارزميات تشفير آمنة ومحدثة", stages: [sast]}
+  - {framework: cscc, id: "2-9-1-1", title: "Use trusted methods and tools for vulnerability assessments", title_ar: "استخدام طرق وأدوات موثوقة لتقييم الثغرات", stages: [sca, container, dast]}
+  - {framework: cscc, id: "2-9-1-3", title: "Remediate critical vulnerabilities immediately", title_ar: "المعالجة الفورية للثغرات الحرجة", stages: [sca, container, policy]}
+  - {framework: cscc, id: "2-12-1-2", title: "Apply at least the OWASP Top Ten to web applications", title_ar: "تطبيق الحد الأدنى من معايير OWASP Top Ten على تطبيقات الويب", stages: [sast, dast]}
+
+  # ---------------------------------------------------------------- NCA CCC-2:2024 (cloud)
+  - {framework: ccc, id: "2-9-T-1-1", title: "Cloud tenant: assess and remediate cloud service vulnerabilities at least every three months", title_ar: "المستأجر السحابي: تقييم ثغرات الخدمات السحابية ومعالجتها كل ثلاثة أشهر على الأقل", stages: [sca, container, policy]}
+  - {framework: ccc, id: "1-5-P-3-1", title: "Cloud provider: implement planned production changes securely", title_ar: "مقدم الخدمة السحابية: تنفيذ التغييرات المخطط لها في بيئة الإنتاج بشكل آمن", stages: [cicd, sast, sca, container]}
+  - {framework: ccc, id: "2-3-P-1-1", title: "Cloud provider: configure systems in line with cybersecurity standards", title_ar: "مقدم الخدمة السحابية: ضبط الأنظمة وفق معايير الأمن السيبراني", stages: [iac, kubernetes]}
+  - {framework: ccc, id: "2-9-P-1-1", title: "Cloud provider: assess and remediate stack vulnerabilities (monthly external, quarterly internal)", title_ar: "مقدم الخدمة السحابية: تقييم ثغرات المنظومة ومعالجتها (شهرياً للخارجية وكل ثلاثة أشهر للداخلية)", stages: [sca, container]}
+  - {framework: ccc, id: "2-14-P-1-1", title: "Cloud provider: protect information in application service transactions", title_ar: "مقدم الخدمة السحابية: حماية المعلومات في معاملات خدمات التطبيقات", stages: [dast, runtime]}
+  - {framework: ccc, id: "2-16-P-3-2", title: "Cloud provider: protect development, testing and integration environments", title_ar: "مقدم الخدمة السحابية: حماية بيئات التطوير والاختبار والتكامل", stages: [cicd, secrets]}
+
+  # ---------------------------------------------------------------- Saudi PDPL
+  - {framework: pdpl, id: "Art. 19", title: "Technical measures to protect personal data", title_ar: "التدابير التقنية لحماية البيانات الشخصية", stages: [secrets, sast, dast, iac, container]}

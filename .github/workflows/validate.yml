@@ -1,0 +1,214 @@
+# Validates this repository on every change:
+#   lint       actionlint + shellcheck + zizmor over every workflow, the action and the CI scripts
+#   unit       pytest for the scanner, merger and report
+#   consumer   calls the reusable workflow exactly as a consumer would, on two fixtures, with the
+#              scanner built from this commit and publishing off; then asserts the planted flaws
+#              were caught and that no scanner errored
+name: validate
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions: {}
+
+jobs:
+  lint:
+    name: lint
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Install linters
+        run: python -m pip install --quiet actionlint-py shellcheck-py zizmor
+      - name: actionlint (includes shellcheck of every run block)
+        run: actionlint -color
+      - name: shellcheck the CI scripts
+        run: shellcheck ci/sawone-scan.sh scripts/*.sh
+      - name: every action pinned to a commit SHA
+        run: scripts/pin-actions.sh --check
+      - name: zizmor
+        run: zizmor --config .github/zizmor.yml --offline .github/workflows action.yml
+
+  unit:
+    name: unit tests
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Install
+        run: python -m pip install --quiet pytest pyyaml weasyprint
+      - name: pytest
+        run: python -m pytest tests/unit -q
+
+  # Called exactly as a consumer would. Two explicit jobs (not a matrix) so each one's outputs
+  # stay distinct for the release test below.
+  consumer-flask:
+    name: consumer python-flask
+    needs: [lint, unit]
+    permissions:
+      contents: read
+      actions: read # code scanning upload (disabled here, but the workflow declares it)
+      security-events: write # same
+    uses: ./.github/workflows/sawone-scan.yml
+    with:
+      path: tests/fixtures/python-flask
+      artifact-prefix: consumer-python-flask
+      scanner-source-path: scanner
+      enforce: false # the fixtures are vulnerable on purpose; assertions run below
+      fail-on-scanner-error: true # but a crashed scanner must still fail
+      upload-sarif: never
+      dast-full-scan: false # keep the self-test short
+      enable-cicd: false # the fixtures have no workflows of their own
+      pr-gate: all # the fixtures' flaws also exist on main; the assertions need them to fail here too
+
+  consumer-terraform:
+    name: consumer terraform-aws
+    needs: [lint, unit]
+    permissions:
+      contents: read
+      actions: read # code scanning upload (disabled here, but the workflow declares it)
+      security-events: write # same
+    uses: ./.github/workflows/sawone-scan.yml
+    with:
+      path: tests/fixtures/terraform-aws
+      artifact-prefix: consumer-terraform-aws
+      scanner-source-path: scanner
+      enforce: false
+      fail-on-scanner-error: true
+      upload-sarif: never
+      enable-cicd: false
+      pr-gate: all
+
+  # The same Terraform flaws, all accepted in .sawone-baseline.yml: the IaC gate must pass and say so.
+  consumer-baselined:
+    name: consumer terraform-aws (baselined)
+    needs: [lint, unit]
+    permissions:
+      contents: read
+      actions: read # code scanning upload (disabled here, but the workflow declares it)
+      security-events: write # same
+    uses: ./.github/workflows/sawone-scan.yml
+    with:
+      path: tests/fixtures/terraform-aws-baselined
+      artifact-prefix: consumer-terraform-aws-baselined
+      scanner-source-path: scanner
+      enforce: true # must pass on its own merits
+      upload-sarif: never
+      enable-cicd: false
+      pr-gate: all
+
+  # Full release path, only on pushes to main: publish the scanned fixture image to a dedicated
+  # self-test package, sign it, attest its SBOM, generate SLSA provenance, and run a no-op deploy
+  # behind the `selftest` environment. On pull requests this job is skipped.
+  release:
+    name: release python-flask (main only)
+    needs: consumer-flask
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      actions: read # SLSA generator reads the run
+      packages: write # push the self-test image
+      id-token: write # keyless signing and provenance
+    uses: ./.github/workflows/sawone-release.yml
+    with:
+      artifact-prefix: ${{ needs.consumer-flask.outputs.artifact-prefix }}
+      image-id: ${{ needs.consumer-flask.outputs.image-id }}
+      local-tag: ${{ needs.consumer-flask.outputs.local-tag }}
+      scan-passed: ${{ needs.consumer-flask.outputs.passed }}
+      require-scan-pass: false # the fixture is vulnerable on purpose; never do this for real images
+      image-name: ghcr.io/${{ github.repository_owner }}/sawone-selftest-app
+      enable-production-deploy: false # deployment needs a passing scan; covered by the check job's logic
+
+  assert:
+    name: assert ${{ matrix.fixture }}
+    needs: [consumer-flask, consumer-terraform, consumer-baselined]
+    if: always()
+    runs-on: ubuntu-24.04
+    permissions: {}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - fixture: python-flask
+            expect_failed: "secrets sast sca container"
+            expect_ran: "secrets sast sca container dast runtime" # no threat model file in this fixture
+          - fixture: terraform-aws
+            expect_failed: "iac"
+            expect_ran: "iac"
+          - fixture: terraform-aws-baselined
+            expect_failed: ""
+            expect_ran: "iac"
+            expect_baselined: "Trivy config"
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: consumer-${{ matrix.fixture }}-report
+          path: report
+      - name: Planted flaws caught, nothing crashed, report complete
+        env:
+          EXPECT_FAILED: ${{ matrix.expect_failed }}
+          EXPECT_RAN: ${{ matrix.expect_ran }}
+          EXPECT_BASELINED: ${{ matrix.expect_baselined }}
+        run: |
+          s=report/summary.json
+          jq -r '.stages[] | "\(.stage)\t\(.tool)\t\(.status)\t\(.findings // .reason)"' "$s"
+          bad=0
+          for stage in $EXPECT_FAILED; do
+            if jq -e --arg s "$stage" '[.stages[] | select(.stage == $s and .status == "failed")] | length > 0' "$s" > /dev/null; then
+              echo "OK: $stage caught the planted flaw"
+            else
+              echo "::error::$stage did not fail"; bad=1
+            fi
+          done
+          for stage in $EXPECT_RAN; do
+            jq -e --arg s "$stage" '[.stages[] | select(.stage == $s and .status != "skipped")] | length > 0' "$s" > /dev/null \
+              || { echo "::error::$stage did not run"; bad=1; }
+          done
+          errors=$(jq '[.stages[] | select(.status == "error")] | length' "$s")
+          [ "$errors" = 0 ] || { echo "::error::$errors scanner error(s)"; bad=1; }
+          jq -e '.release["Tool versions"] | startswith("latest")' "$s" > /dev/null || { echo "::error::tool lock not recorded"; bad=1; }
+          test -s report/security-report.pdf || { echo "::error::no PDF"; bad=1; }
+          test -s report/security-report-ar.pdf || { echo "::error::no Arabic PDF"; bad=1; }
+          (cd report && sha256sum --quiet -c evidence/manifest.sha256) || { echo "::error::evidence manifest does not verify"; bad=1; }
+          jq -e '.trend | has("open")' "$s" > /dev/null || { echo "::error::trend missing"; bad=1; }
+          test -s report/junit.xml || { echo "::error::no JUnit"; bad=1; }
+          if [ -n "$EXPECT_BASELINED" ]; then
+            jq -e --arg t "$EXPECT_BASELINED" '.stages[] | select(.tool == $t and .status == "passed"
+                 and (.findings | test("accepted in baseline")))' "$s" > /dev/null \
+              || { echo "::error::$EXPECT_BASELINED did not pass through the baseline"; bad=1; }
+            jq -e '[.stages[] | select(.status == "failed")] | length == 0' "$s" > /dev/null \
+              || { echo "::error::a gate failed although every finding is accepted"; bad=1; }
+          fi
+          # normalised findings, risk policy and compliance evidence
+          jq -e 'length > 0' report/findings-consolidated.json > /dev/null || { echo "::error::no consolidated findings"; bad=1; }
+          if [ -n "$EXPECT_FAILED" ]; then
+            jq -e '[.[] | select(.gating)] | length > 0' report/findings-consolidated.json > /dev/null \
+              || { echo "::error::no blocking findings recorded"; bad=1; }
+          else
+            jq -e '[.[] | select(.baselined)] | length > 0' report/findings-consolidated.json > /dev/null \
+              || { echo "::error::no accepted findings recorded"; bad=1; }
+          fi
+          jq -e '.stages[] | select(.stage == "policy" and .tool == "Risk intelligence (KEV/EPSS)" and .status == "report")' "$s" > /dev/null \
+            || { echo "::error::KEV/EPSS feeds were not loaded"; bad=1; }
+          jq -e '.compliance | length > 20' "$s" > /dev/null || { echo "::error::compliance map missing"; bad=1; }
+          jq -e '.findings.unique >= 1' "$s" > /dev/null || { echo "::error::findings summary missing"; bad=1; }
+          exit $bad

@@ -1,0 +1,131 @@
+name: Sawone
+description: >-
+  One step, any language or framework: detects what the repository contains, runs the right
+  open-source scanners (threat model, secrets, SAST, SCA, licences, IaC, Kubernetes, CI/CD,
+  container, DAST, WAF), prioritises with CISA KEV and EPSS, honours an expiring baseline of
+  accepted risks, maps results to ASVS / NIST SSDF / NCA ECC / SAMA CSF, and produces SARIF,
+  JUnit and a PDF report.
+author: hackin2minutes-oss
+branding:
+  icon: shield
+  color: blue
+
+inputs:
+  path:
+    description: Directory to scan (relative to the workspace)
+    default: "."
+  config:
+    description: Optional config file (relative to path)
+    default: ".sawone.yml"
+  severity:
+    description: Severities that fail a gate, lowest first (overrides the config file)
+    default: ""
+  enforce:
+    description: "'false' = report only, never fail the job (overrides the config file)"
+    default: ""
+  dast:
+    description: "'auto' (default: run when a Dockerfile exposes a port), 'true' or 'false'"
+    default: ""
+  baseline-file:
+    description: Accepted-risk file (owner, reason, expiry per finding), relative to path
+    default: ".sawone-baseline.yml"
+  block-kev:
+    description: "'true' = CVEs in the CISA KEV catalogue block at any severity"
+    default: "true"
+  epss-threshold:
+    description: Also block CVEs with an EPSS score at or above this (0-1; 0 = off)
+    default: "0"
+  skip:
+    description: Comma-separated tools to skip, e.g. "nuclei,checkov"
+    default: ""
+  upload-sarif:
+    description: >-
+      Publish findings to GitHub code scanning: 'auto' (public repos only, where it is free),
+      'true' (also private repos with GitHub Advanced Security) or 'false'
+    default: "auto"
+  defectdojo-url:
+    description: DefectDojo URL (optional)
+    default: ""
+  defectdojo-token:
+    description: DefectDojo API token (optional; pass a secret)
+    default: ""
+  artifact-name:
+    description: Name of the uploaded reports artifact (must be unique per job in a run)
+    default: sawone-reports
+  scanner-image:
+    description: Scanner image to use
+    default: ghcr.io/hackin2minutes-oss/sawone-scanner:1
+
+outputs:
+  passed:
+    description: "'true' when every gate passed"
+    value: ${{ steps.scan.outputs.passed }}
+  reports:
+    description: Path of the reports directory
+    value: ${{ steps.scan.outputs.reports }}
+
+runs:
+  using: composite
+  steps:
+    - name: Scan
+      id: scan
+      shell: bash
+      env:
+        SCAN_PATH_IN: ${{ inputs.path }}
+        SCAN_CONFIG: ${{ inputs.config }}
+        SCAN_SEVERITY: ${{ inputs.severity }}
+        SCAN_ENFORCE: ${{ inputs.enforce }}
+        SCAN_DAST: ${{ inputs.dast }}
+        SCAN_SKIP: ${{ inputs.skip }}
+        SCAN_BASELINE: ${{ inputs.baseline-file }}
+        SCAN_BLOCK_KEV: ${{ inputs.block-kev }}
+        SCAN_EPSS_THRESHOLD: ${{ inputs.epss-threshold }}
+        SCANNER_IMAGE: ${{ inputs.scanner-image }}
+        DEFECTDOJO_URL: ${{ inputs.defectdojo-url }}
+        DEFECTDOJO_TOKEN: ${{ inputs.defectdojo-token }}
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        target="$(cd "$GITHUB_WORKSPACE/$SCAN_PATH_IN" && pwd)"
+        set +e
+        docker run --rm \
+          -v /var/run/docker.sock:/var/run/docker.sock \
+          -v "$target:$target" -w "$target" \
+          -e SCAN_CONFIG -e SCAN_SEVERITY -e SCAN_ENFORCE -e SCAN_DAST -e SCAN_SKIP -e SCAN_BASELINE -e SCAN_BLOCK_KEV -e SCAN_EPSS_THRESHOLD \
+          -e DEFECTDOJO_URL -e DEFECTDOJO_TOKEN -e GH_TOKEN \
+          -e DEFECTDOJO_PRODUCT="$GITHUB_REPOSITORY" -e DEFECTDOJO_ENGAGEMENT="$GITHUB_REF_NAME" \
+          -e REPO="$GITHUB_REPOSITORY" -e SHA="$GITHUB_SHA" -e REF="$GITHUB_REF" \
+          -e RUN_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+          "$SCANNER_IMAGE" --path "$target"
+        code=$?
+        set -e
+        echo "code=$code" >> "$GITHUB_OUTPUT"
+        echo "reports=$target/sawone-reports" >> "$GITHUB_OUTPUT"
+        echo "passed=$([ "$code" = 0 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+        if [ -f "$target/sawone-reports/summary.md" ]; then cat "$target/sawone-reports/summary.md" >> "$GITHUB_STEP_SUMMARY"; fi
+
+    - name: Upload reports
+      if: always()
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: ${{ inputs.artifact-name }}
+        path: ${{ steps.scan.outputs.reports }}
+        if-no-files-found: warn
+
+    - name: Publish to code scanning
+      if: >-
+        always() && steps.scan.outputs.reports != '' &&
+        (inputs.upload-sarif == 'true' || (inputs.upload-sarif == 'auto' && github.event.repository.visibility == 'public'))
+      uses: github/codeql-action/upload-sarif@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
+      with:
+        sarif_file: ${{ steps.scan.outputs.reports }}/sarif
+
+    - name: Result
+      shell: bash
+      env:
+        CODE: ${{ steps.scan.outputs.code }}
+      run: |
+        case "$CODE" in
+          0) echo "All security gates passed." ;;
+          1) echo "::error::Security gates failed — see the job summary and the sawone-reports artifact."; exit 1 ;;
+          *) echo "::error::Scanner error (exit $CODE) — see sawone-reports/logs."; exit "$CODE" ;;
+        esac

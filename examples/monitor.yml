@@ -1,0 +1,24 @@
+# .github/workflows/sawone-monitor.yml — Operate/Monitor: rescan what is actually running, daily.
+# New CVEs (and new entries in CISA's Known Exploited catalogue) appear without any code change.
+# Keeps one issue current and fails the run (GitHub notifies you) when a running image has a
+# known-exploited CVE that is not accepted in your baseline.
+name: sawone-monitor
+
+on:
+  schedule:
+    - cron: "23 4 * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  monitor:
+    permissions:
+      contents: read # baseline and images file
+      packages: read # pull private GHCR images
+      issues: write # the monitoring issue
+    uses: hackin2minutes-oss/sawone/.github/workflows/sawone-monitor.yml@<commit-sha> # v1.0.0
+    with:
+      # what runs in production, by digest; or keep the list in a file your deployment updates
+      images-file: deploy/images.txt
+      fail-on: kev # kev | blocking | none

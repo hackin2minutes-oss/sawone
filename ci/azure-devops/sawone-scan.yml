@@ -1,0 +1,197 @@
+# Sawone for Azure DevOps — the same pipeline as the GitHub workflow, as a stages template: tools resolved
+# once, parallel gates, image + attacks, one merged report (PDF in English and Arabic, SARIF, JUnit, evidence
+# pack), a pull-request comment, previous-report trend and SLA, and incremental pull-request scans.
+#
+#   resources:
+#     repositories:
+#       - repository: sawone
+#         type: github
+#         name: hackin2minutes-oss/sawone
+#         ref: refs/tags/v1.0.0
+#         endpoint: <your GitHub service connection>
+#   stages:
+#     - template: ci/azure-devops/sawone-scan.yml@sawone
+#       parameters:
+#         enforce: "true"
+#
+# Needs Linux agents with Docker (Microsoft-hosted ubuntu-24.04 works). For the pull-request comment, give the
+# build service "Contribute to pull requests" on the repository. Secrets for authenticated DAST
+# (DAST_AUTH_VALUE, or DAST_USERNAME / DAST_PASSWORD) come from a variable group marked secret.
+parameters:
+  - name: image
+    type: string
+    default: ghcr.io/hackin2minutes-oss/sawone-scanner:1
+  - name: enforce
+    type: string
+    default: "true"
+  - name: severity
+    type: string
+    default: "HIGH,CRITICAL"
+  - name: reportLanguages
+    type: string
+    default: "en,ar"
+  - name: gates
+    type: object
+    default: [threat-model, secrets, sast, sca, iac, kubernetes, cicd]
+  - name: attack
+    type: boolean
+    default: true
+  - name: pool
+    type: object
+    default: { vmImage: ubuntu-24.04 }
+
+stages:
+  - stage: sawone_tools
+    displayName: Sawone — resolve tools
+    pool: ${{ parameters.pool }}
+    jobs:
+      - job: tools
+        steps:
+          - checkout: none
+          - bash: |
+              set -euo pipefail
+              out="$(Pipeline.Workspace)/sawone-tools"; mkdir -p "$out/intel"
+              docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "$out:$out" "${{ parameters.image }}" --resolve-tools "$out/tools.lock.json"
+              docker run --rm -v "$out:$out" "${{ parameters.image }}" --fetch-intel "$out/intel" || echo "##vso[task.logissue type=warning]KEV/EPSS feeds unavailable"
+            displayName: Resolve tool versions and threat intelligence once
+          - publish: $(Pipeline.Workspace)/sawone-tools
+            artifact: sawone-tools
+
+  - stage: sawone_scan
+    displayName: Sawone — gates and attacks
+    dependsOn: sawone_tools
+    pool: ${{ parameters.pool }}
+    jobs:
+      - ${{ each g in parameters.gates }}:
+          - job: gate_${{ replace(g, '-', '_') }}
+            displayName: gate ${{ g }}
+            steps:
+              - checkout: self
+                fetchDepth: 0
+              - download: current
+                artifact: sawone-tools
+              - bash: |
+                  set +e
+                  base=""
+                  if [ "$(Build.Reason)" = PullRequest ] && { [ "${{ g }}" = secrets ] || [ "${{ g }}" = sast ]; }; then
+                    target="$(System.PullRequest.TargetBranch)"; target="${target#refs/heads/}"
+                    git fetch -q origin "$target" && base="$(git merge-base "origin/$target" HEAD)"
+                  fi
+                  tools="$(Pipeline.Workspace)/sawone-tools"
+                  docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+                    -v "$(Build.SourcesDirectory):$(Build.SourcesDirectory)" -w "$(Build.SourcesDirectory)" -v "$tools:$tools:ro" \
+                    -e SCAN_ONLY="${{ g }}" -e SCAN_ENFORCE="${{ parameters.enforce }}" -e SCAN_SEVERITY="${{ parameters.severity }}" \
+                    -e SCAN_BASE_SHA="$base" -e SCAN_SKIP -e SCAN_BASELINE -e SCAN_BLOCK_KEV -e SCAN_EPSS_THRESHOLD \
+                    -e SCAN_TOOLS_LOCK="$tools/tools.lock.json" -e SCAN_INTEL_DIR="$tools/intel" \
+                    -e REPO="$(Build.Repository.Name)" -e SHA="$(Build.SourceVersion)" -e REF="$(Build.SourceBranch)" \
+                    -e RUN_URL="$(System.CollectionUri)$(System.TeamProject)/_build/results?buildId=$(Build.BuildId)" \
+                    "${{ parameters.image }}" --path "$(Build.SourcesDirectory)" --reports "sawone-part-${{ g }}"
+                  code=$?
+                  cat "sawone-part-${{ g }}/summary.md" 2>/dev/null
+                  [ "$code" -le 1 ] || exit $code
+                displayName: Scan (${{ g }})
+              - publish: $(Build.SourcesDirectory)/sawone-part-${{ g }}
+                artifact: sawone-part-${{ g }}
+                condition: always()
+      - ${{ if eq(parameters.attack, true) }}:
+          - job: image_and_attacks
+            displayName: image + attacks (container, DAST, WAF)
+            timeoutInMinutes: 120
+            steps:
+              - checkout: self
+              - download: current
+                artifact: sawone-tools
+              - bash: |
+                  set +e
+                  if ! ls Dockerfile */Dockerfile >/dev/null 2>&1; then echo "no Dockerfile: skipped"; mkdir -p sawone-part-image; exit 0; fi
+                  tools="$(Pipeline.Workspace)/sawone-tools"
+                  docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+                    -v "$(Build.SourcesDirectory):$(Build.SourcesDirectory)" -w "$(Build.SourcesDirectory)" -v "$tools:$tools:ro" \
+                    -e SCAN_ONLY=container,dast,runtime -e SCAN_ENFORCE="${{ parameters.enforce }}" -e SCAN_SEVERITY="${{ parameters.severity }}" \
+                    -e SCAN_SKIP -e SCAN_BASELINE -e SCAN_BLOCK_KEV -e SCAN_EPSS_THRESHOLD -e SCAN_APP_PORT -e SCAN_HEALTH_PATH \
+                    -e DAST_AUTH_VALUE -e DAST_USERNAME -e DAST_PASSWORD \
+                    -e SCAN_TOOLS_LOCK="$tools/tools.lock.json" -e SCAN_INTEL_DIR="$tools/intel" \
+                    -e REPO="$(Build.Repository.Name)" -e SHA="$(Build.SourceVersion)" -e REF="$(Build.SourceBranch)" \
+                    "${{ parameters.image }}" --path "$(Build.SourcesDirectory)" --reports sawone-part-image
+                  code=$?
+                  [ "$code" -le 1 ] || exit $code
+                displayName: Build, scan and attack the image
+                env:   # secret variables reach a script only when mapped; unset ones arrive as "$(NAME)" and are ignored
+                  DAST_AUTH_VALUE: $(DAST_AUTH_VALUE)
+                  DAST_USERNAME: $(DAST_USERNAME)
+                  DAST_PASSWORD: $(DAST_PASSWORD)
+              - publish: $(Build.SourcesDirectory)/sawone-part-image
+                artifact: sawone-part-image
+                condition: always()
+
+  - stage: sawone_report
+    displayName: Sawone — report
+    dependsOn: sawone_scan
+    condition: always()
+    pool: ${{ parameters.pool }}
+    jobs:
+      - job: report
+        steps:
+          - checkout: none
+          - download: current
+            patterns: "sawone-part-*/**"
+          # previous report of the target branch (pull requests) or this branch: trend, SLA, new-only gate
+          - bash: |
+              b="$(System.PullRequest.TargetBranch)"
+              case "$b" in '$('*|'') b="$(Build.SourceBranch)" ;; esac
+              echo "##vso[task.setvariable variable=SAWONE_PREV_BRANCH]$b"
+            displayName: Previous report branch
+          - task: DownloadPipelineArtifact@2
+            displayName: Previous report
+            continueOnError: true
+            inputs:
+              buildType: specific
+              project: $(System.TeamProjectId)
+              definition: $(System.DefinitionId)
+              buildVersionToDownload: latestFromBranch
+              branchName: $(SAWONE_PREV_BRANCH)
+              artifactName: sawone-reports
+              targetPath: $(Pipeline.Workspace)/prev
+          - bash: |
+              set +e
+              out="$(Pipeline.Workspace)/sawone-reports"
+              args="--languages ${{ parameters.reportLanguages }}"
+              prev="$(Pipeline.Workspace)/prev"
+              [ -f "$prev/findings-consolidated.json" ] && args="$args --previous-findings $prev/findings-consolidated.json"
+              if [ "$(Build.Reason)" = PullRequest ]; then
+                args="$args --pr-gate new"; [ -f "$prev/findings.json" ] && args="$args --base-findings $prev/findings.json"
+              fi
+              parts="$(ls -d "$(Pipeline.Workspace)"/sawone-part-*/ 2>/dev/null | tr '\n' ' ')"
+              docker run --rm -v "$(Pipeline.Workspace):$(Pipeline.Workspace)" --entrypoint python3 \
+                -e REPO="$(Build.Repository.Name)" -e SHA="$(Build.SourceVersion)" -e REF="$(Build.SourceBranch)" \
+                -e RUN_URL="$(System.CollectionUri)$(System.TeamProject)/_build/results?buildId=$(Build.BuildId)" \
+                "${{ parameters.image }}" /opt/sawone/merge_reports.py --out "$out" $args $parts
+              code=$?
+              cat "$out/summary.md"
+              echo "##vso[task.uploadsummary]$out/summary.md"
+              echo "##vso[task.setvariable variable=SAWONE_CODE]$code"
+            displayName: Merge, report, evidence
+          - bash: |
+              set -euo pipefail
+              api="$(System.CollectionUri)$(System.TeamProject)/_apis/git/repositories/$(Build.Repository.ID)/pullRequests/$(System.PullRequest.PullRequestId)/threads?api-version=7.1"
+              body="$(jq -Rs --arg url "$(System.CollectionUri)$(System.TeamProject)/_build/results?buildId=$(Build.BuildId)" \
+                '{comments: [{parentCommentId: 0, commentType: 1, content: (. + "\n\n[Full report and evidence](" + $url + ")")}], status: 1}' \
+                "$(Pipeline.Workspace)/sawone-reports/summary.md")"
+              curl -sf -X POST -H "Authorization: Bearer $SYSTEM_ACCESSTOKEN" -H "Content-Type: application/json" -d "$body" "$api" > /dev/null
+            displayName: Pull-request comment
+            condition: and(always(), eq(variables['Build.Reason'], 'PullRequest'))
+            continueOnError: true
+            env:
+              SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+          - task: PublishTestResults@2
+            condition: always()
+            inputs:
+              testResultsFormat: JUnit
+              testResultsFiles: $(Pipeline.Workspace)/sawone-reports/junit.xml
+              testRunTitle: Sawone security gates
+          - publish: $(Pipeline.Workspace)/sawone-reports
+            artifact: sawone-reports
+            condition: always()
+          - bash: exit "${SAWONE_CODE:-2}"
+            displayName: Result
+            condition: always()

@@ -1,0 +1,80 @@
+# .sawone.yml — OPTIONAL. Without it the scanner detects everything itself.
+# Copy into a repository's root only to change the defaults.
+
+severity: HIGH,CRITICAL       # severities that fail a gate, lowest first
+enforce: true                 # false = report only (use for the first weeks of a rollout)
+self_update: true             # upgrade in-image Python tools at scan time
+
+exclude:                      # glob patterns, relative to the repo root
+  - tests/fixtures/*
+  - solutions/*
+
+skip: []                      # tool names: gitleaks trufflehog semgrep trivy osv checkov hadolint
+                              # kubeconform kubelinter conftest actionlint zizmor pytm threagile
+                              # container zap nuclei waf iast
+
+semgrep:
+  configs: []                 # empty = auto (p/default + one pack per detected language/framework)
+  extra_configs: []           # added to the auto set, e.g. [p/owasp-top-ten, ./semgrep-rules/]
+  framework_filter: true      # drop rules written for frameworks this repo does not use (Django rules on a Flask app)
+
+container:
+  enabled: true
+  max_images: 3               # Dockerfiles to build and scan
+  build_args: {}
+
+dast:
+  nuclei_mode: auto           # auto: only templates for the technologies Nuclei detects (-as)
+  enabled: auto               # auto = run when the built image EXPOSEs a port
+  port: null                  # override the EXPOSEd port
+  health_path: null           # default: tries /health /healthz /actuator/health /ready /
+  env: {}                     # env vars the app needs to start, e.g. {DATABASE_URL: "sqlite://"}
+  full_scan: true             # ZAP active scan (attacks a throwaway copy of the app)
+  max_minutes: 20
+  openapi: null               # path to an OpenAPI spec (auto-detected if named openapi/swagger.*)
+  nuclei: true
+  ajax_spider: false          # also crawl with a real browser (JavaScript-heavy apps; slower)
+  auth:                       # authenticated scanning (secrets: dast-auth-value, or dast-username/-password)
+    header: Authorization
+    login_url: null           # e.g. /api/login — POST login_body, read token_field from the JSON reply
+    login_body: null          # default {"username": "${DAST_USERNAME}", "password": "${DAST_PASSWORD}"}
+    token_field: token
+    token_prefix: "Bearer "
+
+waf:
+  enabled: true               # ModSecurity + OWASP CRS blocking test in front of the app; with an OpenAPI
+                              # spec it also attacks each real endpoint and parameter through the WAF
+
+image_config:
+  enabled: true               # Dockle CIS checks on the built image (report only)
+
+source_sbom:
+  enabled: true               # Syft CycloneDX SBOM of the repository (raw/sbom-source.cdx.json)
+
+threat_model:
+  min_severity: Very High     # pytm threats at/above this need a decision in MITIGATED
+
+policy:
+  block_kev: true             # CVEs in the CISA Known Exploited Vulnerabilities catalogue block at any severity
+  epss_threshold: 0           # 0 = off; e.g. 0.5 also blocks CVEs with ≥ 50% EPSS exploit probability
+
+baseline:
+  file: .sawone-baseline.yml  # accepted risks: owner, reason, expiry per entry
+  max_days: 365               # longest allowed expiry; forces at least a yearly re-review
+
+report:
+  profile: balanced           # balanced: low-severity second-opinion findings are counted, not listed · full: list everything
+  languages: [en, ar]         # PDF languages (the workflow input report-languages overrides this)
+
+noise:
+  mute_rules: []              # rule or check IDs never reported, e.g. [CKV_DOCKER_2, generic.secrets.gitleaks.generic-api-key]
+
+sla:                          # days to fix, counted from the date a finding was first seen
+  CRITICAL: 7
+  HIGH: 30
+  MEDIUM: 90
+  LOW: 180
+
+compliance:
+  frameworks: [asvs, ssdf, ecc, cscc, ccc, sama, pdpl]   # evidence map; drop the ones you do not report against
+

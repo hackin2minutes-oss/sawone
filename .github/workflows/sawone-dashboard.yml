@@ -1,0 +1,145 @@
+# Reusable portfolio dashboard: one page for every repository that runs Sawone.
+#
+#   on:
+#     schedule: [{ cron: "17 5 * * *" }]   # daily, after the nightly scans
+#     workflow_dispatch:
+#   jobs:
+#     dashboard:
+#       permissions: { contents: read, actions: read, pages: write, id-token: write }
+#       uses: hackin2minutes-oss/sawone/.github/workflows/sawone-dashboard.yml@<commit-sha>
+#       with:
+#         repositories: |
+#           my-org/payments-api
+#           my-org/web-portal
+#         publish-pages: true
+#       secrets:
+#         read-token: ${{ secrets.SAWONE_READ_TOKEN }}   # fine-grained token: Actions read on those repos
+#
+# It downloads each repository's newest sawone-report artefact from its default branch (or `branch`),
+# keeps a history (trend lines) in the Actions cache of this repository, and builds a self-contained
+# HTML page: verdict, blocking findings by severity, known-exploited and live secrets, findings past
+# their fix deadline, compliance coverage per framework, and the top risks across the portfolio.
+# The page is uploaded as an artefact; with publish-pages it is also deployed to GitHub Pages
+# (then the caller grants pages: write and id-token: write, and the repository's Pages source is
+# "GitHub Actions"). Keep the Pages site private (GitHub Enterprise) or the repository private.
+name: sawone-dashboard
+
+on:
+  workflow_call:
+    inputs:
+      repositories:
+        description: One owner/repo per line
+        type: string
+        required: true
+      artifact-name:
+        description: Report artefact name in those repositories (artifact-prefix + '-report')
+        type: string
+        default: sawone-report
+      branch:
+        description: Branch whose latest report counts ('' = each repository's default branch)
+        type: string
+        default: ""
+      title:
+        type: string
+        default: Security posture
+      publish-pages:
+        type: boolean
+        default: false
+      scanner-image:
+        type: string
+        default: ghcr.io/hackin2minutes-oss/sawone-scanner:1
+      runs-on:
+        type: string
+        default: ubuntu-24.04
+    secrets:
+      read-token:
+        description: Token with Actions read access to every listed repository ('' = this run's token, same repository only)
+        required: false
+
+permissions: {}
+
+jobs:
+  build:
+    name: build dashboard
+    runs-on: ${{ inputs.runs-on }}
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Restore history
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/history
+          key: sawone-dashboard-history-${{ github.run_id }}
+          restore-keys: sawone-dashboard-history-
+      - name: Download each repository's latest report
+        env:
+          GH_TOKEN: ${{ secrets.read-token || github.token }}
+          REPOS: ${{ inputs.repositories }}
+          ARTIFACT: ${{ inputs.artifact-name }}
+          BRANCH: ${{ inputs.branch }}
+        run: |
+          set -uo pipefail
+          in="$RUNNER_TEMP/inputs"; mkdir -p "$in" "$RUNNER_TEMP/history"
+          [[ "$ARTIFACT" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,60}$ ]] || { echo "::error::artifact-name is invalid"; exit 1; }
+          ok=0
+          while read -r repo; do
+            repo="$(echo "$repo" | tr -d '[:space:]')"
+            [ -z "$repo" ] && continue
+            [[ "$repo" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || { echo "::warning::skipping '$repo' (not owner/repo)"; continue; }
+            branch="$BRANCH"
+            [ -z "$branch" ] && branch="$(gh api "repos/$repo" --jq .default_branch 2>/dev/null)"
+            id="$(gh api "repos/$repo/actions/artifacts?name=$ARTIFACT&per_page=50" \
+                  --jq "[.artifacts[] | select(.expired == false and .workflow_run.head_branch == \"$branch\")] | sort_by(.created_at) | last | .id // empty" 2>/dev/null)"
+            if [ -z "$id" ]; then echo "::warning::$repo: no $ARTIFACT on $branch (no scan yet, expired, or no access)"; continue; fi
+            dir="$in/${repo/\//__}"; mkdir -p "$dir"
+            if gh api "repos/$repo/actions/artifacts/$id/zip" > "$dir/r.zip" && \
+               unzip -q -o "$dir/r.zip" summary.json findings-consolidated.json 'evidence/index.json' -d "$dir" 2>/dev/null; then
+              ok=$((ok + 1)); echo "$repo: report $id from $branch"
+            else
+              echo "::warning::$repo: report $id could not be read"
+            fi
+            rm -f "$dir/r.zip"
+          done <<< "$REPOS"
+          [ "$ok" -gt 0 ] || { echo "::error::no repository report could be downloaded"; exit 1; }
+      - name: Build the page
+        env:
+          SCANNER: ${{ inputs.scanner-image }}
+          TITLE: ${{ inputs.title }}
+        run: |
+          set -euo pipefail
+          docker run --rm -v "$RUNNER_TEMP:$RUNNER_TEMP" --entrypoint python3 "$SCANNER" /opt/sawone/dashboard.py \
+            --inputs "$RUNNER_TEMP/inputs" --history "$RUNNER_TEMP/history/history.json" \
+            --out "$RUNNER_TEMP/site" --title "$TITLE"
+          echo "Dashboard built: $(jq '.repositories | length' "$RUNNER_TEMP/site/data.json") repositories" >> "$GITHUB_STEP_SUMMARY"
+      - name: Save history
+        if: always()
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/history
+          key: sawone-dashboard-history-${{ github.run_id }}
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sawone-dashboard
+          path: ${{ runner.temp }}/site
+          retention-days: 30
+      - name: Prepare the Pages artefact
+        if: inputs.publish-pages
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: ${{ runner.temp }}/site
+
+  pages:
+    name: publish to GitHub Pages
+    needs: build
+    if: inputs.publish-pages
+    runs-on: ${{ inputs.runs-on }}
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

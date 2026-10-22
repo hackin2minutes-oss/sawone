@@ -1,0 +1,4 @@
+# Self-test only: allow a far-future expiry so the fixture never rots. Real repos keep the
+# default (365 days) so every accepted risk is re-reviewed at least yearly.
+baseline:
+  max_days: 36500

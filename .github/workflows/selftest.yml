@@ -1,0 +1,70 @@
+# Self-test: build the scanner from this commit, scan every fixture with the action itself,
+# and assert that the expected gates catch the planted flaws.
+name: selftest
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  fixture:
+    name: scan ${{ matrix.fixture }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - fixture: python-flask
+            expect_failed: "secrets sast sca container"
+          - fixture: node-express
+            expect_failed: "sca container"
+          - fixture: terraform-aws
+            expect_failed: "iac"
+          - fixture: k8s-helm
+            expect_failed: "iac"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+      - name: Build scanner from this commit
+        run: docker build -t sawone-scanner:selftest scanner
+      - name: Scan the fixture with the action (report-only, assertions below)
+        id: scan
+        uses: ./
+        with:
+          path: tests/fixtures/${{ matrix.fixture }}
+          enforce: "false"
+          upload-sarif: "false"
+          artifact-name: reports-${{ matrix.fixture }}
+          scanner-image: sawone-scanner:selftest
+      - name: Assert the planted flaws were caught
+        env:
+          REPORTS: ${{ steps.scan.outputs.reports }}
+          EXPECT: ${{ matrix.expect_failed }}
+          FIXTURE: ${{ matrix.fixture }}
+        run: |
+          jq -r '.stages[] | "\(.stage)\t\(.tool)\t\(.status)\t\(.findings // .reason)"' "$REPORTS/summary.json"
+          missing=0
+          for stage in $EXPECT; do
+            if jq -e --arg s "$stage" '[.stages[] | select(.stage == $s and .status == "failed")] | length > 0' "$REPORTS/summary.json" >/dev/null; then
+              echo "OK: $stage gate caught the planted flaw"
+            else
+              echo "::error::$stage gate did NOT fail on $FIXTURE"; missing=1
+            fi
+          done
+          errors=$(jq '[.stages[] | select(.status == "error")] | length' "$REPORTS/summary.json")
+          if [ "$errors" -gt 0 ]; then
+            echo "::error::$errors scanner error(s)"
+            jq -r '.stages[] | select(.status == "error") | "  \(.stage) \(.tool): \(.reason)"' "$REPORTS/summary.json"
+            missing=1
+          fi
+          test -s "$REPORTS/security-report.pdf" || { echo "::error::no PDF report"; missing=1; }
+          exit $missing

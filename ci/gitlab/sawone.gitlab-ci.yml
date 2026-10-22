@@ -1,0 +1,191 @@
+# Sawone for GitLab CI — the same pipeline as the GitHub workflow: tools resolved once, parallel gates,
+# image + attacks, one merged report (PDF in English and Arabic, SARIF, JUnit, evidence pack), a
+# merge-request comment, previous-report trend and SLA, and incremental merge-request scans.
+#
+#   include:
+#     - remote: https://raw.githubusercontent.com/hackin2minutes-oss/sawone/v1/ci/gitlab/sawone.gitlab-ci.yml
+#   stages: [sawone-plan, sawone-scan, sawone-attack, sawone-report]
+#
+# CI/CD variables (all optional): SCAN_SEVERITY, SCAN_ENFORCE (default true), SCAN_BASELINE, SCAN_BLOCK_KEV,
+# SCAN_EPSS_THRESHOLD, SCAN_SKIP, SAWONE_REPORT_LANGUAGES (default en,ar), SCAN_APP_PORT, SCAN_HEALTH_PATH,
+# DAST_AUTH_VALUE / DAST_USERNAME / DAST_PASSWORD (masked; authenticated DAST),
+# SAWONE_GITLAB_TOKEN (masked; project access token with api scope — enables the merge-request comment).
+#
+# RUNNER REQUIREMENT: the scanner starts sibling containers, so jobs must reach a Docker daemon that sees the
+# project directory: mount the Docker socket and /builds into the job containers
+# (volumes = ["/var/run/docker.sock:/var/run/docker.sock", "/builds:/builds"]) or use a shell executor with
+# Docker. Plain docker-in-docker without a shared /builds will not see the checked-out code.
+
+variables:
+  SAWONE_IMAGE: ghcr.io/hackin2minutes-oss/sawone-scanner:1
+  SAWONE_REPORT_LANGUAGES: "en,ar"
+  GIT_DEPTH: "0"   # secret scanners read the history; incremental scans need the base commit
+
+.sawone:
+  image: docker:cli
+  variables:
+    SAWONE_TOOLS: $CI_PROJECT_DIR/sawone-tools
+  before_script:
+    - docker pull -q "$SAWONE_IMAGE" > /dev/null
+  # one scanner run; SCAN_ONLY picks the stages, the rest of the environment is shared
+  script:
+    - set +e
+    - >
+      docker run --rm -v /var/run/docker.sock:/var/run/docker.sock
+      -v "$CI_PROJECT_DIR:$CI_PROJECT_DIR" -w "$CI_PROJECT_DIR"
+      -e SCAN_ONLY -e SCAN_SEVERITY -e SCAN_ENFORCE -e SCAN_SKIP -e SCAN_BASELINE -e SCAN_BLOCK_KEV -e SCAN_EPSS_THRESHOLD
+      -e SCAN_APP_PORT -e SCAN_HEALTH_PATH -e SCAN_BASE_SHA -e SCAN_DAST_FULL
+      -e DAST_AUTH_VALUE -e DAST_USERNAME -e DAST_PASSWORD
+      -e SCAN_TOOLS_LOCK="$SAWONE_TOOLS/tools.lock.json" -e SCAN_INTEL_DIR="$SAWONE_TOOLS/intel"
+      -e REPO="$CI_PROJECT_PATH" -e SHA="$CI_COMMIT_SHA" -e REF="$CI_COMMIT_REF_NAME" -e RUN_URL="$CI_PIPELINE_URL"
+      "$SAWONE_IMAGE" --path "$CI_PROJECT_DIR" --reports "sawone-part-$CI_JOB_NAME_SLUG"
+    - code=$?
+    - cat "sawone-part-$CI_JOB_NAME_SLUG/summary.md" 2>/dev/null || true
+    - '[ "$code" -le 1 ] || exit $code'   # a gate failure is decided in the report job; a scanner crash fails here
+  artifacts:
+    when: always
+    expire_in: 7 days
+    paths: [sawone-part-*/]
+
+sawone-tools:
+  extends: .sawone
+  stage: sawone-plan
+  script:
+    - mkdir -p sawone-tools/intel
+    - docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "$CI_PROJECT_DIR:$CI_PROJECT_DIR" "$SAWONE_IMAGE" --resolve-tools "$SAWONE_TOOLS/tools.lock.json"
+    - docker run --rm -v "$CI_PROJECT_DIR:$CI_PROJECT_DIR" "$SAWONE_IMAGE" --fetch-intel "$SAWONE_TOOLS/intel" || echo "KEV/EPSS feeds unavailable; parts will report it"
+  artifacts:
+    expire_in: 1 day
+    paths: [sawone-tools/]
+
+# ---------------------------------------------------------------- parallel gates
+.sawone-gate:
+  extends: .sawone
+  stage: sawone-scan
+  needs: [sawone-tools]
+
+sawone-secrets:
+  extends: .sawone-gate
+  variables: { SCAN_ONLY: secrets }
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      variables: { SCAN_ONLY: secrets, SCAN_BASE_SHA: $CI_MERGE_REQUEST_DIFF_BASE_SHA }
+    - when: on_success
+
+sawone-sast:
+  extends: .sawone-gate
+  variables: { SCAN_ONLY: sast }
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      variables: { SCAN_ONLY: sast, SCAN_BASE_SHA: $CI_MERGE_REQUEST_DIFF_BASE_SHA }
+    - when: on_success
+
+sawone-threat-model:
+  extends: .sawone-gate
+  variables: { SCAN_ONLY: threat-model }
+  rules:   # incremental merge requests: only when the model changed
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes: ["**/threatmodel/**", "**/threagile.y*ml"]
+    - if: $CI_PIPELINE_SOURCE != "merge_request_event"
+
+sawone-sca:
+  extends: .sawone-gate
+  variables: { SCAN_ONLY: sca }
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes: ["**/requirements*.txt", "**/Pipfile*", "**/poetry.lock", "**/pyproject.toml", "**/uv.lock", "**/package*.json",
+                "**/yarn.lock", "**/pnpm-lock.yaml", "**/pom.xml", "**/build.gradle*", "**/go.mod", "**/go.sum", "**/Gemfile*",
+                "**/composer.*", "**/Cargo.*", "**/*.csproj", "**/packages.*"]
+    - if: $CI_PIPELINE_SOURCE != "merge_request_event"
+
+sawone-iac:
+  extends: .sawone-gate
+  variables: { SCAN_ONLY: iac }
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes: ["**/*.tf", "**/*.tfvars", "**/*.hcl", "**/*.bicep", "**/*.json", "**/*.y*ml", "**/*Dockerfile*", "**/Containerfile"]
+    - if: $CI_PIPELINE_SOURCE != "merge_request_event"
+
+sawone-kubernetes:
+  extends: .sawone-gate
+  variables: { SCAN_ONLY: kubernetes }
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes: ["**/*.y*ml", "**/*.tpl", "**/Chart.*"]
+    - if: $CI_PIPELINE_SOURCE != "merge_request_event"
+
+sawone-cicd:
+  extends: .sawone-gate
+  variables: { SCAN_ONLY: cicd }
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes: [".gitlab-ci.yml", ".github/**/*", "**/action.y*ml"]
+    - if: $CI_PIPELINE_SOURCE != "merge_request_event"
+
+# ---------------------------------------------------------------- image, then attacks on that image
+# one job: the scanner builds the image once, scans it, then attacks the same container
+sawone-image-and-attacks:
+  extends: .sawone
+  stage: sawone-attack
+  needs: [sawone-tools]
+  variables:
+    SCAN_ONLY: container,dast,runtime
+  rules:
+    - exists: ["**/Dockerfile", "Dockerfile"]
+  timeout: 2h
+
+# ---------------------------------------------------------------- report
+sawone-report:
+  extends: .sawone
+  stage: sawone-report
+  when: always
+  needs:
+    - { job: sawone-tools, optional: true }
+    - { job: sawone-secrets, optional: true }
+    - { job: sawone-sast, optional: true }
+    - { job: sawone-threat-model, optional: true }
+    - { job: sawone-sca, optional: true }
+    - { job: sawone-iac, optional: true }
+    - { job: sawone-kubernetes, optional: true }
+    - { job: sawone-cicd, optional: true }
+    - { job: sawone-image-and-attacks, optional: true }
+  script:
+    - apk add --no-cache curl unzip jq > /dev/null
+    - set +e
+    # previous report: the target branch's on merge requests, this branch's otherwise (trend, SLA, new-only gate)
+    - prev_ref="${CI_MERGE_REQUEST_TARGET_BRANCH_NAME:-$CI_COMMIT_REF_NAME}"
+    - mkdir -p prev
+    - >
+      curl -sf --header "JOB-TOKEN: $CI_JOB_TOKEN" -o prev/r.zip
+      "$CI_API_V4_URL/projects/$CI_PROJECT_ID/jobs/artifacts/$prev_ref/download?job=sawone-report"
+      && unzip -q -o -j prev/r.zip 'sawone-reports/findings.json' 'sawone-reports/findings-consolidated.json' -d prev
+      || echo "no earlier report on $prev_ref"
+    - args="--languages $SAWONE_REPORT_LANGUAGES"
+    - '[ -f prev/findings-consolidated.json ] && args="$args --previous-findings $CI_PROJECT_DIR/prev/findings-consolidated.json"'
+    - '[ "$CI_PIPELINE_SOURCE" = merge_request_event ] && args="$args --pr-gate new" && [ -f prev/findings.json ] && args="$args --base-findings $CI_PROJECT_DIR/prev/findings.json"'
+    - parts="$(ls -d "$CI_PROJECT_DIR"/sawone-part-*/ 2>/dev/null | tr '\n' ' ')"
+    - >
+      docker run --rm -v "$CI_PROJECT_DIR:$CI_PROJECT_DIR" -w "$CI_PROJECT_DIR" --entrypoint python3
+      -e REPO="$CI_PROJECT_PATH" -e SHA="$CI_COMMIT_SHA" -e REF="$CI_COMMIT_REF_NAME" -e RUN_URL="$CI_PIPELINE_URL"
+      "$SAWONE_IMAGE" /opt/sawone/merge_reports.py --out "$CI_PROJECT_DIR/sawone-reports" $args $parts
+    - code=$?
+    - cat sawone-reports/summary.md
+    # merge-request comment (one note, updated on every push)
+    - |
+      if [ "$CI_PIPELINE_SOURCE" = merge_request_event ] && [ -n "${SAWONE_GITLAB_TOKEN:-}" ]; then
+        api="$CI_API_V4_URL/projects/$CI_PROJECT_ID/merge_requests/$CI_MERGE_REQUEST_IID/notes"
+        body="$(printf '<!-- sawone -->\n%s\n\n[Full report and evidence](%s)' "$(cat sawone-reports/summary.md)" "$CI_PIPELINE_URL")"
+        note="$(curl -sf --header "PRIVATE-TOKEN: $SAWONE_GITLAB_TOKEN" "$api?per_page=100" | jq -r '[.[] | select(.body | startswith("<!-- sawone -->"))][0].id // empty')"
+        if [ -n "$note" ]; then
+          curl -sf -X PUT --header "PRIVATE-TOKEN: $SAWONE_GITLAB_TOKEN" --data-urlencode "body=$body" "$api/$note" > /dev/null
+        else
+          curl -sf -X POST --header "PRIVATE-TOKEN: $SAWONE_GITLAB_TOKEN" --data-urlencode "body=$body" "$api" > /dev/null
+        fi
+      fi
+    - exit $code
+  artifacts:
+    when: always
+    expire_in: 30 days
+    paths: [sawone-reports/]
+    reports:
+      junit: sawone-reports/junit.xml
