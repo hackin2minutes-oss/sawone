@@ -87,15 +87,15 @@ jobs:
             repo="$(echo "$repo" | tr -d '[:space:]')"
             [ -z "$repo" ] && continue
             [[ "$repo" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || { echo "::warning::skipping '$repo' (not owner/repo)"; continue; }
-            branch="$BRANCH"
-            [ -z "$branch" ] && branch="$(gh api "repos/$repo" --jq .default_branch 2>/dev/null)"
+            br="$BRANCH"
+            [ -z "$br" ] && br="$(gh api "repos/$repo" --jq .default_branch 2>/dev/null)"
             id="$(gh api "repos/$repo/actions/artifacts?name=$ARTIFACT&per_page=50" \
-                  --jq "[.artifacts[] | select(.expired == false and .workflow_run.head_branch == \"$branch\")] | sort_by(.created_at) | last | .id // empty" 2>/dev/null)"
-            if [ -z "$id" ]; then echo "::warning::$repo: no $ARTIFACT on $branch (no scan yet, expired, or no access)"; continue; fi
+                  --jq "[.artifacts[] | select(.expired == false and .workflow_run.head_branch == \"$br\")] | sort_by(.created_at) | last | .id // empty" 2>/dev/null)"
+            if [ -z "$id" ]; then echo "::warning::$repo: no $ARTIFACT on $br (no scan yet, expired, or no access)"; continue; fi
             dir="$in/${repo/\//__}"; mkdir -p "$dir"
             if gh api "repos/$repo/actions/artifacts/$id/zip" > "$dir/r.zip" && \
                unzip -q -o "$dir/r.zip" summary.json findings-consolidated.json 'evidence/index.json' -d "$dir" 2>/dev/null; then
-              ok=$((ok + 1)); echo "$repo: report $id from $branch"
+              ok=$((ok + 1)); echo "$repo: report $id from $br"
             else
               echo "::warning::$repo: report $id could not be read"
             fi

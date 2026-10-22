@@ -439,7 +439,9 @@ jobs:
             echo "- gates: ${gates[*]:-none}"
             echo "- image: ${dockerfile:-none} (build $has_image)"
             echo "- attacks: ${attack[*]:-none} (depth: $depth, ZAP active scan: $full)"
-            [ -n "$base_sha" ] && echo "- incremental: compared with ${base_sha:0:12}; not affected by the change: ${unchanged[*]:-none}"
+            if [ -n "$base_sha" ]; then
+              echo "- incremental: compared with ${base_sha:0:12}; not affected by the change: ${unchanged[*]:-none}"
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
 
   tools:
@@ -887,12 +889,12 @@ jobs:
           set -uo pipefail
           dir="$RUNNER_TEMP/base"
           mkdir -p "$dir"
-          branch="$BRANCH"; [ "$IS_PR" = true ] && branch="$BASE"
+          br="$BRANCH"; [ "$IS_PR" = true ] && br="$BASE"
           # the newest report from an earlier run of that branch (this run's report is not uploaded yet)
           id="$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=$PREFIX-report&per_page=50" \
-                --jq "[.artifacts[] | select(.expired == false and .workflow_run.head_branch == \"$branch\" and .workflow_run.id != $GITHUB_RUN_ID)] | sort_by(.created_at) | last | .id // empty" 2>/dev/null)"
+                --jq "[.artifacts[] | select(.expired == false and .workflow_run.head_branch == \"$br\" and .workflow_run.id != $GITHUB_RUN_ID)] | sort_by(.created_at) | last | .id // empty" 2>/dev/null)"
           if [ -z "$id" ]; then
-            echo "::notice::No earlier $PREFIX-report from branch $branch: every finding is first seen now$([ "$IS_PR" = true ] && echo ' and counts as new')."
+            echo "::notice::No earlier $PREFIX-report from branch $br: every finding is first seen now$([ "$IS_PR" = true ] && echo ' and counts as new')."
             exit 0
           fi
           gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$id/zip" > "$dir/prev.zip" || exit 0
@@ -902,7 +904,7 @@ jobs:
           fi
           if [ -f "$dir/findings-consolidated.json" ]; then
             echo "previous=$dir/findings-consolidated.json" >> "$GITHUB_OUTPUT"
-            echo "previous report: artifact $id from $branch ($(jq length "$dir/findings-consolidated.json") findings)"
+            echo "previous report: artifact $id from $br ($(jq length "$dir/findings-consolidated.json") findings)"
           fi
       - name: Merge reports
         id: merge
