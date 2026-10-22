@@ -40,7 +40,7 @@ def test_first_seen_is_carried_forward_and_deadlines_are_computed():
 def test_without_a_previous_report_everything_is_first_seen_now():
     cur = F.consolidate([_v()])
     tr = F.apply_history(cur, None)
-    assert tr["previous"] is False and tr["new"] is None and cur[0]["first_seen"] == dt.date.today().isoformat()
+    assert tr["previous"] is False and tr["new"] is None and cur[0]["first_seen"] == dt.datetime.now(dt.timezone.utc).date().isoformat()
 
 
 # ------------------------------------------------------------------ false positives

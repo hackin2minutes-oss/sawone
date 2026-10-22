@@ -201,10 +201,10 @@ AR = {
     "Balanced: low-severity findings from second-opinion tools are counted but not listed":
         "متوازن: تُحصى النتائج منخفضة الخطورة من أدوات الرأي الثاني دون إدراجها",
     "Full: every finding is listed": "كامل: تُدرج كل النتائج",
-    "The same flaw reported by several tools, or by several rules of one tool, is merged into one finding in chapters "
-    "1 and 4; each tool's own list in chapter 5 is complete":
-        "يُدمج الخلل نفسه الذي أبلغت عنه عدة أدوات أو عدة قواعد لأداة واحدة في نتيجة واحدة في الفصلين 1 و4؛ وقائمة كل "
-        "أداة في الفصل 5 كاملة",
+    "The same flaw reported by several tools, or by several rules of one tool, is merged into one finding in the "
+    "executive summary and the risk-ranked list; each tool's own list in Detailed results is complete":
+        "يُدمج الخلل نفسه الذي أبلغت عنه عدة أدوات أو عدة قواعد لأداة واحدة في نتيجة واحدة في الملخص التنفيذي وقائمة "
+        "النتائج المرتبة حسب الخطورة؛ وقائمة كل أداة في النتائج التفصيلية كاملة",
     "Days to fix from first seen: {s}": "أيام المعالجة من أول ظهور: {s}",
     "Version policy “{p}”: every tool resolved once and pinned by digest for the whole run (see Appendix A)":
         "سياسة الإصدارات «{p}»: حُددت كل أداة مرة واحدة وثُبتت ببصمتها طوال التشغيل (انظر الملحق A)",
@@ -227,10 +227,10 @@ AR = {
     # ---------------------------------------------------------------- risk-ranked, trend
     "Unique findings across every tool, duplicates merged, ordered by: blocking, known exploited, severity, then "
     "exploit probability (EPSS). At most 8 findings per tool are shown here so one noisy scanner cannot hide the "
-    "others; every finding appears in its tool's section in chapter 5.":
+    "others; every finding appears in its tool's section in Detailed results.":
         "النتائج الفريدة من كل الأدوات بعد دمج المكرر، مرتبة حسب: المنع، ثم الاستغلال الفعلي، ثم الخطورة، ثم احتمال "
         "الاستغلال (EPSS). يُعرض هنا 8 نتائج كحد أقصى لكل أداة حتى لا تحجب أداة كثيرة النتائج غيرها؛ وتظهر كل نتيجة "
-        "في قسم أداتها في الفصل 5.",
+        "في قسم أداتها في النتائج التفصيلية.",
     "No blocking or known-exploited findings.": "لا توجد نتائج مانعة أو مستغلة فعلياً.",
     "{n} further blocking findings are listed in their tool sections.": "{n} نتيجة مانعة أخرى مدرجة في أقسام أدواتها.",
     "Each finding keeps the date it was first seen, carried over from the previous report of this branch. Its fix "
@@ -281,9 +281,9 @@ AR = {
     "did not": "فحص Grype قائمة المكونات بشكل مستقل. يتفق مع Trivy في {a} إشعاراً مانعاً، ويُبلغ عن {b} لم يُبلغ عنها Trivy",
     "The usual causes are a different vulnerability database (Grype also matches upstream advisories for Debian "
     "packages that Debian has not yet triaged) and Grype seeing the language runtime itself as a package. Duplicates "
-    "are merged in chapter 4.": "الأسباب المعتادة هي اختلاف قاعدة بيانات الثغرات (يطابق Grype أيضاً إشعارات المصدر "
+    "are merged in the risk-ranked list.": "الأسباب المعتادة هي اختلاف قاعدة بيانات الثغرات (يطابق Grype أيضاً إشعارات المصدر "
                                 "لحزم Debian التي لم تفرزها Debian بعد)، واعتبار Grype بيئة تشغيل اللغة نفسها حزمة. "
-                                "تُدمج التكرارات في الفصل 4.",
+                                "تُدمج التكرارات في قائمة النتائج المرتبة حسب الخطورة.",
     "Blocking advisories found only by Grype": "إشعارات مانعة وجدها Grype وحده",
     "Grype found nothing that Trivy missed.": "لم يجد Grype شيئاً فات Trivy.",
     "Operating-system packages": "حزم نظام التشغيل", "Application packages": "حزم التطبيق",
@@ -463,4 +463,8 @@ AR.update({
 AR.update({
     "Code findings are attributed to every one of these elements because none of them lists its {sf} in the model: {els}. Set {sf} on each so evidence lands on the right element.":
         "تُنسب نتائج الشيفرة إلى كل هذه العناصر لأن أياً منها لا يحدد {sf} في النموذج: {els}. حدّد {sf} لكل عنصر حتى تُنسب الأدلة إلى العنصر الصحيح.",
+})
+AR.update({
+    "Threats against external elements ({els}) are listed for awareness but never block: you cannot fix a third party's system. Protect the data flows to them instead.":
+        "التهديدات على العناصر الخارجية ({els}) مدرجة للاطلاع ولا تمنع أبداً، إذ لا يمكنك إصلاح نظام طرف ثالث. احمِ تدفقات البيانات إليها بدلاً من ذلك.",
 })

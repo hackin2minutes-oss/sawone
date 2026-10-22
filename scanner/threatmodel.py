@@ -225,9 +225,16 @@ def _external(model, elems):
     return out
 
 
+CI_PATHS = re.compile(r"(^|/)(\.github/|\.gitlab-ci\.ya?ml$|\.gitlab/|azure-pipelines[^/]*\.ya?ml$|"
+                      r"Jenkinsfile$|\.circleci/|bitbucket-pipelines\.ya?ml$)")
+
+
 def _path(f):
     loc = str(f.get("location") or "")
-    return loc.split(":", 1)[0].split(" ", 1)[0].lstrip("./")
+    p = loc.split(":", 1)[0].split(" ", 1)[0]
+    while p.startswith("./"):
+        p = p[2:]
+    return p.lstrip("/")
 
 
 def _in_files(f, files):
@@ -235,7 +242,10 @@ def _in_files(f, files):
     project, which may itself be a subdirectory of the scanned workspace)."""
     p = "/" + _path(f)
     for x in files:
-        x = "/" + str(x).strip().lstrip("./").rstrip("/")
+        x = str(x).strip()
+        while x.startswith("./"):
+            x = x[2:]
+        x = "/" + x.strip("/")
         if x == "/":
             continue
         if p.endswith(x) or (x + "/") in (p + "/"):
@@ -327,6 +337,10 @@ def analyse(model, findings, decisions=(), mitigated=None, min_severity="Very Hi
                 dynamic = bool(stages & {"dast", "runtime", "iast"})
                 if el.get("files") and not dynamic and not _in_files(f, el["files"]):
                     continue                          # static evidence must sit in the element's own files
+                if not dynamic and not el.get("files") and CI_PATHS.search(_path(f)):
+                    continue                          # a pipeline weakness is not evidence about the app
+                if el["kind"] == "Datastore" and not dynamic and not el.get("files"):
+                    continue                          # IaC proves a store's controls only when the model names its files
                 if dynamic and target not in exposed:
                     continue                          # an attack from outside proves nothing about inner elements
                 if CLASSES[cls].get("kinds") and el["kind"] not in CLASSES[cls]["kinds"]:
@@ -367,7 +381,8 @@ def analyse(model, findings, decisions=(), mitigated=None, min_severity="Very Hi
                         "status": status, "evidence_level": best, "evidence": uniq[:12], "evidence_total": len(uniq),
                         "decision": dec, "mitigations": _tidy(t.get("mitigations")), "references": t.get("references") or "",
                         "exposed": target in exposed,
-                        "gating": open_ and (SEV_ORDER.index(sev) >= floor if sev in SEV_ORDER else False)})
+                        "gating": open_ and target not in external
+                                  and (SEV_ORDER.index(sev) >= floor if sev in SEV_ORDER else False)})
 
     model_classes = {k for sid in {t["sid"] for t in threats} for k in sid_classes.get(sid, [])}
     gaps = []

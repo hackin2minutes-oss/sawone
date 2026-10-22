@@ -577,8 +577,10 @@ class Scan:
                 def decided(f):
                     return (f'{f["threat_id"]}@{f["target"]}' in mitigated
                             or TMA._decision_for(f["threat_id"], f["target"], decisions) is not None)
-                open_items = [f for f in data.get("findings", [])
-                              if f.get("severity") in order and order.index(f["severity"]) >= floor and not decided(f)]
+                external = TMA._external(data, TMA._elements(data))    # third-party systems: listed, never blocking
+                at_floor = [f for f in data.get("findings", [])
+                            if f.get("severity") in order and order.index(f["severity"]) >= floor and not decided(f)]
+                open_items = [f for f in at_floor if f.get("target") not in external]
                 (self.reports / "raw" / "threat-decisions.json").write_text(json.dumps(
                     {"active": decisions, "expired": expired, "errors": derrs, "mitigated": mitigated,
                      "min_severity": self.cfg["threat_model"]["min_severity"]}, indent=1))
@@ -590,7 +592,9 @@ class Scan:
                          for f in data.get("findings", []) if f.get("threat_id")]
                 for it in items:
                     it["location"] = f'{inv["threat_model"]} · {it["title"].rsplit(" — ", 1)[-1]}'
-                note = "".join([f" · {len(decisions)} decision(s)" if decisions else "",
+                ext_n = len(at_floor) - len(open_items)
+                note = "".join([f" · {ext_n} on external elements (not blocking)" if ext_n else "",
+                                f" · {len(decisions)} decision(s)" if decisions else "",
                                 f" · {len(expired)} expired decision(s)" if expired else "",
                                 f" · {len(derrs)} invalid decision(s) ignored" if derrs else ""])
                 self.gate("threat-model", "OWASP pytm", len(open_items),

@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.1.1 — Fixes from the first full mywife report
+
+- Threats against external elements (a third-party site in the actors' trust boundary) are listed but no
+  longer block the threat-model gate; the gate row says how many were set aside.
+- Threat evidence: findings in CI configuration (`.github/`, `.gitlab-ci.yml`, …) are no longer taken as
+  evidence about the application, and IaC findings attach to a datastore only when the model lists the
+  datastore's `sourceFiles` (AWS Terraform said nothing about mywife's SQLite store). Paths starting with a
+  dot (`.github/…`) are now matched correctly against `sourceFiles`.
+- The report referred to "chapter 5" for the per-tool lists after the Trend chapter moved Detailed results to
+  chapter 6; references now use section names (English and Arabic).
+
 ## 1.1.0 — Threat model you can check
 
 - **Data-flow diagram** of the pytm model (trust boundaries, element types, ordered flows, unencrypted

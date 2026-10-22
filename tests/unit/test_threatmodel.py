@@ -256,3 +256,40 @@ def test_flows_take_attack_evidence_only_and_unscoped_processes_are_named():
     m["elements"].append({"name": "Worker", "__class__": "Process", "inBoundary": "Container", "sourceFiles": []})
     m["elements"][0]["sourceFiles"] = []
     assert TM.analyse(m, [])["unscoped"] == ["Web app", "Worker"]
+
+
+def test_threats_on_external_elements_never_block():
+    a = TM.analyse(model(), [])
+    ext = next(t for t in a["threats"] if t["sid"] == "INP31" and t["target"] == "Partner site")
+    own = next(t for t in a["threats"] if t["sid"] == "INP31" and t["target"] == "Web app")
+    assert not ext["gating"] and own["gating"]
+
+
+def test_the_gate_job_does_not_count_external_elements(tmp_path):
+    pytest.importorskip("pytm")
+    ws = tmp_path / "src"
+    (ws / "threatmodel").mkdir(parents=True)
+    shutil.copy(ROOT / "tests" / "fixtures" / "python-flask" / "app.py", ws / "app.py")
+    tm = (ROOT / "tests" / "fixtures" / "python-flask" / "threatmodel" / "tm.py").read_text()
+    tm = tm.replace('MITIGATED = {}', 'partner = Process("Partner API")\npartner.inBoundary = internet\n'
+                    'Dataflow(app, partner, "partner call")\nMITIGATED = {}')
+    (ws / "threatmodel" / "tm.py").write_text(tm)
+    s = make_scan(tmp_path, ws)
+    s.run = ds.Scan.run.__get__(s)
+    s.scan_threat_model()
+    row = next(r for r in s.stages if r["stage"] == "threat-model")
+    assert "on external elements (not blocking)" in row["findings"]
+    assert not any(f["gating"] and f["title"].endswith("— Partner API") for f in s.findings)
+
+
+def test_ci_findings_and_unscoped_iac_are_not_evidence_about_the_app():
+    m = model()
+    m["elements"][0]["sourceFiles"] = []                      # app without sourceFiles
+    ci = sast("yaml.github-actions.security.run-shell-injection", ".github/workflows/ci.yml", ["CWE-78"])
+    a = TM.analyse(m, [ci])
+    assert next(t for t in a["threats"] if t["sid"] == "INP31" and t["target"] == "Web app")["status"] == "theoretical"
+    m["findings"].append({"threat_id": "CR05", "target": "DB", "severity": "High", "description": "Brute forcing"})
+    s3 = F.issue("iac", "Trivy config", "misconfig", "AVD-AWS-0088", "infra/main.tf", 9, "HIGH", "RDS storage is not encrypted")
+    assert next(t for t in TM.analyse(m, [s3])["threats"] if t["sid"] == "CR05")["status"] == "theoretical"
+    m["elements"][1]["sourceFiles"] = ["infra/main.tf"]       # the model says where the store is defined
+    assert next(t for t in TM.analyse(m, [s3])["threats"] if t["sid"] == "CR05")["status"] == "in-code"

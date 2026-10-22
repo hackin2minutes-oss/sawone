@@ -1021,7 +1021,8 @@ class Report:
                                         "listed") if self.opts.get("profile", "balanced") == "balanced"
                      else T("Full: every finding is listed")),
                     ("Duplicates", T("The same flaw reported by several tools, or by several rules of one tool, is merged "
-                                     "into one finding in chapters 1 and 4; each tool's own list in chapter 5 is complete")),
+                                     "into one finding in the executive summary and the risk-ranked list; each tool's own list in Detailed "
+                                     "results is complete")),
                     ("Fix deadlines (SLA)", (T("Days to fix from first seen: {s}", s=sla_txt) if sla_txt else "—")),
                     ("Tool versions", T("Version policy “{p}”: every tool resolved once and pinned by digest for the "
                                         "whole run (see Appendix A)", p=esc(d.version_policy)) if d.version_policy
@@ -1096,7 +1097,7 @@ class Report:
         out.append('<p class="lead">' + T("Unique findings across every tool, duplicates merged, ordered by: blocking, "
                                           "known exploited, severity, then exploit probability (EPSS). At most 8 "
                                           "findings per tool are shown here so one noisy scanner cannot hide the "
-                                          "others; every finding appears in its tool's section in chapter 5.") + '</p>')
+                                          "others; every finding appears in its tool's section in Detailed results.") + '</p>')
         cand = [f for f in d.merged if f.get("gating") or f.get("kev")]
         if not cand:
             out.append(callout(T("No blocking or known-exploited findings."), "ok"))
@@ -1418,6 +1419,11 @@ class Report:
                 out.append(f"<h4>{T('At or above the gate threshold, needing a decision')}</h4>")
                 out.append(table(["Severity", "Threat", "Element", "Suggested mitigation"], rows, "findings",
                                  ["11%", "37%", "16%", "36%"]))
+            ext = sorted({x["target"] for x in threats if x.get("external")})
+            if ext:
+                out.append(note(T("Threats against external elements ({els}) are listed for awareness but never block: "
+                                  "you cannot fix a third party's system. Protect the data flows to them instead.",
+                                  els=", ".join(esc(x) for x in ext))))
             out.append(note(T("Every threat with its evidence is in {f}.", f="<span class='mono'>threat-model.json</span>")))
         return "".join(out)
 
@@ -1518,7 +1524,7 @@ class Report:
                     + (f" ({esc(why)})" if why else "") + ". "
                     + T("The usual causes are a different vulnerability database (Grype also matches upstream "
                         "advisories for Debian packages that Debian has not yet triaged) and Grype seeing the language "
-                        "runtime itself as a package. Duplicates are merged in chapter 4.") + "</p>"]
+                        "runtime itself as a package. Duplicates are merged in the risk-ranked list.") + "</p>"]
             if only:
                 tbl, _ = vuln_by_cve(only, source=src)
                 body.append(f"<h3>{T('Blocking advisories found only by Grype')}</h3>" + tbl)
