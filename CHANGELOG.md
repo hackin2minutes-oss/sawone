@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.3.3 — GitHub Marketplace
+
+- The action is listed on GitHub Marketplace as "Sawone DevSecOps Scanner" ("Sawone" is taken there) with a
+  one-line description (Marketplace allows fewer than 125 characters). No change to scanning.
+
 ## 1.3.2 — Code scanning status
 
 - Fix: GitHub code scanning showed "Code scanning tool `kube-linter` exited with errors" on every run.

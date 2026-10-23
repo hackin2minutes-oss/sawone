@@ -1,10 +1,5 @@
-name: Sawone
-description: >-
-  One step, any language or framework: detects what the repository contains, runs the right
-  open-source scanners (threat model, secrets, SAST, SCA, licences, IaC, Kubernetes, CI/CD,
-  container, DAST, WAF), prioritises with CISA KEV and EPSS, honours an expiring baseline of
-  accepted risks, maps results to ASVS / NIST SSDF / NCA ECC / SAMA CSF, and produces SARIF,
-  JUnit and a PDF report.
+name: Sawone DevSecOps Scanner
+description: "Phase-wise DevSecOps scans for any repo: secrets, SAST, SCA, IaC, containers, DAST, threat model. PDF report in EN/AR."
 author: hackin2minutes-oss
 branding:
   icon: shield
