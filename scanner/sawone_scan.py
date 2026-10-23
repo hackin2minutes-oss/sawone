@@ -522,6 +522,14 @@ class Scan:
         ws = str(self.ws).rstrip("/") + "/"
         for i, run in enumerate(d.get("runs", [])):
             run["automationDetails"] = {"id": f"sawone/{category}/{i}/"}
+            # Some linters (kube-linter) mark the run executionSuccessful: false just because they found
+            # problems; code scanning then shows "tool exited with errors". Sawone records real tool failures
+            # from exit codes and logs, so a run that produced results without error notifications succeeded.
+            errs = any(n.get("level") == "error" for inv in run.get("invocations") or []
+                       for n in inv.get("toolExecutionNotifications") or [])
+            for inv in run.get("invocations") or []:
+                if inv.get("executionSuccessful") is False and not errs:
+                    inv["executionSuccessful"] = True
             for r in run.get("results", []) or []:
                 for loc in r.get("locations", []) or []:
                     al = (loc.get("physicalLocation") or {}).get("artifactLocation") or {}

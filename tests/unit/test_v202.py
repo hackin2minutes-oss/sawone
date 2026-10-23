@@ -90,6 +90,22 @@ def test_sarif_paths_become_workspace_relative(tmp_path):
     assert uri == "requirements.txt"
 
 
+def test_sarif_with_findings_is_not_reported_as_a_failed_run(tmp_path):
+    """kube-linter writes executionSuccessful: false whenever it finds something; code scanning then says the
+    tool 'exited with errors'. Only error notifications mean the run itself failed."""
+    s = make_scan(tmp_path, FIX / "python-flask")
+    p = s.reports / "sarif" / "kube-linter.sarif"
+    found = {"tool": {"driver": {"name": "kube-linter"}}, "invocations": [{"executionSuccessful": False}],
+             "results": [{"ruleId": "run-as-non-root"}]}
+    broken = {"tool": {"driver": {"name": "x"}}, "invocations": [{"executionSuccessful": False,
+              "toolExecutionNotifications": [{"level": "error", "message": {"text": "parse failure"}}]}]}
+    p.write_text(json.dumps({"runs": [found, broken]}))
+    s.sarif_tag(p, "kube-linter")
+    runs = json.loads(p.read_text())["runs"]
+    assert runs[0]["invocations"][0]["executionSuccessful"] is True
+    assert runs[1]["invocations"][0]["executionSuccessful"] is False
+
+
 def test_waf_attacks_each_real_endpoint_from_the_openapi_spec(tmp_path):
     s = make_scan(tmp_path, FIX / "python-flask")
     checks = s.waf_endpoint_checks()

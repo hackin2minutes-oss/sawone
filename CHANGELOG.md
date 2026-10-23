@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.3.2 — Code scanning status
+
+- Fix: GitHub code scanning showed "Code scanning tool `kube-linter` exited with errors" on every run.
+  kube-linter marks its SARIF run as unsuccessful whenever it finds a problem; Sawone now passes such runs as
+  successful unless the SARIF carries an error notification (real tool failures are reported from exit codes
+  and logs, as before).
+
 ## 1.3.1 — Nuclei templates
 
 - Fix: Nuclei could stop with "no templates provided for scan" (a scanner error that failed the run). Nuclei
