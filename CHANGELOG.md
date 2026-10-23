@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.3.1 — Nuclei templates
+
+- Fix: Nuclei could stop with "no templates provided for scan" (a scanner error that failed the run). Nuclei
+  downloads its templates through the GitHub API, which rate-limits busy shared runners, and its template
+  update failed without saying so. Sawone now checks the templates are on disk before the scan and, if not,
+  clones the templates repository with plain git. If that fails too, the report says why
+  ("Nuclei templates: could not be installed …") instead of a bare Nuclei error.
+- The single-step action keeps tool data (vulnerability databases, Nuclei templates) in
+  `$RUNNER_TEMP/sawone-cache`, like the reusable workflow, so the scanner can check it.
+
 ## 1.3.0 — An engine other products can build on
 
 - Product profiles (`SAWONE_PROFILE`): a product built on the engine adds its own stages (phase, position,

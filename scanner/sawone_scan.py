@@ -1337,11 +1337,12 @@ class Scan:
                                               "-jsonl-export", str(jsonl)], log_name,
                                    extra=["--network", self.network, *self.cache_mount("nuclei", "/root")])[0]
             auto = d.get("nuclei_mode", "auto") == "auto"
-            code, run_log = nuclei(["-as"] if auto else [], "nuclei"), "nuclei"   # -as: detected stack only
+            local = self.nuclei_templates()
+            every = ["-t", "/root/nuclei-templates"] if local else []
+            code, run_log = nuclei(["-as"] if auto else every, "nuclei"), "nuclei"   # -as: detected stack only
             if auto and code != 0 and not sarif.exists():
-                # -as needs templates already installed and never fetches them; a plain run installs them
                 log(f"Nuclei technology-filtered scan failed ({self.last_error('nuclei')}); running every template")
-                code, run_log = nuclei([], "nuclei-all"), "nuclei-all"
+                code, run_log = nuclei(every, "nuclei-all"), "nuclei-all"
             if code != 0 and not sarif.exists():
                 self.record("dast", "Nuclei", "error", self.last_error(run_log))
             else:
@@ -1360,6 +1361,34 @@ class Scan:
                 n = len(items) or sum(len(r.get("results", [])) for r in (load_json(sarif) or {}).get("runs", []))
                 self.gate("dast", "Nuclei", 0, f"{n} findings · template matches, verify before acting", report_only=True,
                           items=items or None)
+
+    def nuclei_templates(self):
+        """Make sure Nuclei's templates are on disk; True when they are, in <cache>/nuclei/nuclei-templates
+        (/root/nuclei-templates in the Nuclei container).
+
+        Nuclei installs its templates through the GitHub API, which rate-limits unauthenticated calls per IP;
+        on shared CI runners -update-templates then fails quietly and the scan stops with "no templates
+        provided for scan". With a host cache directory, check the templates are there and, if not, clone
+        the templates repository with plain git, which that limit does not apply to."""
+        if not self.cache_dir:
+            return False
+        d = Path(self.cache_dir) / "nuclei" / "nuclei-templates"
+        def present():
+            return d.is_dir() and next(d.rglob("*.yaml"), None) is not None
+        if present():
+            return True
+        log("Nuclei templates not installed (template update failed, often a GitHub API rate limit); cloning them")
+        shutil.rmtree(d, ignore_errors=True)
+        d.parent.mkdir(parents=True, exist_ok=True)
+        self.run(["git", "clone", "--quiet", "--depth", "1", "https://github.com/projectdiscovery/nuclei-templates",
+                  str(d)], log_name="clone-nuclei-templates", timeout=900)
+        if present():
+            os.chmod(d, 0o777)
+            return True
+        self.record("dast", "Nuclei templates", "error",
+                    "templates could not be installed: " + self.last_error("update-nuclei-templates")
+                    + "; git clone: " + self.last_error("clone-nuclei-templates"))
+        return False
 
     def _zap_counts(self, path):
         data = load_json(path)

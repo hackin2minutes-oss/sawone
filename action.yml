@@ -90,12 +90,16 @@ runs:
         GH_TOKEN: ${{ github.token }}
       run: |
         target="$(cd "$GITHUB_WORKSPACE/$SCAN_PATH_IN" && pwd)"
+        # tool data (vulnerability databases, Nuclei templates) in a host directory the scanner can check
+        cache="$RUNNER_TEMP/sawone-cache"
+        mkdir -p "$cache"
         set +e
         docker run --rm \
           -v /var/run/docker.sock:/var/run/docker.sock \
           -v "$target:$target" -w "$target" \
           -e SCAN_CONFIG -e SCAN_SEVERITY -e SCAN_ENFORCE -e SCAN_DAST -e SCAN_SKIP -e SCAN_PHASES -e SCAN_BASELINE -e SCAN_BLOCK_KEV -e SCAN_EPSS_THRESHOLD \
           -e DEFECTDOJO_URL -e DEFECTDOJO_TOKEN -e GH_TOKEN \
+          -e SCAN_CACHE_DIR="$cache" -v "$cache:$cache" \
           -e DEFECTDOJO_PRODUCT="$GITHUB_REPOSITORY" -e DEFECTDOJO_ENGAGEMENT="$GITHUB_REF_NAME" \
           -e REPO="$GITHUB_REPOSITORY" -e SHA="$GITHUB_SHA" -e REF="$GITHUB_REF" \
           -e RUN_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \

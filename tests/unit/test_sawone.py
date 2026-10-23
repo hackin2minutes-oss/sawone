@@ -224,3 +224,52 @@ def test_nuclei_falls_back_to_every_template_when_the_tech_filter_cannot_run(tmp
     runs = [c for c in s.run.calls if "-u" in c and any("nuclei" in str(x) for x in c)]
     assert len(runs) == 2 and "-as" in runs[0] and "-as" not in runs[1]
     assert not any(r["tool"] == "Nuclei" and r["status"] == "error" for r in s.stages), s.stages
+
+
+def _nuclei_dast(tmp_path, monkeypatch, clone_ok):
+    """The selftest failure: the template update was rate-limited, so neither the -as run nor the
+    every-template run had templates ("no templates provided for scan")."""
+    s = make_scan(tmp_path, FIX / "python-flask", {"dast": {"full_scan": False, "openapi": None}})
+    s.cache_dir = str(tmp_path / "cache")
+    wrk = tmp_path / "zap"
+    wrk.mkdir()
+    monkeypatch.setattr(s, "ensure_app", lambda *a, **k: {"base": "http://app:8080"})
+    monkeypatch.setattr(s, "_zap_dir", lambda: wrk)
+    monkeypatch.setattr(s, "prepare_auth", lambda base: True)
+    monkeypatch.setattr(s, "_zap_gate", lambda *a, **k: None)
+    monkeypatch.setattr(ds.shutil, "copy", lambda *a, **k: None)
+
+    def clone(cmd):
+        if clone_ok:
+            d = Path(cmd[-1]) / "http" / "cves"
+            d.mkdir(parents=True)
+            (d / "CVE-2021-0000.yaml").write_text("id: x\n")
+
+    def scan(cmd):
+        if "-t" in cmd:
+            Path(s.reports / "sarif" / "nuclei.sarif").write_text('{"runs": []}')
+    s.run = FakeRun(s, [
+        (lambda c: c[:2] == ["git", "clone"], 0 if clone_ok else 128,
+         "" if clone_ok else "fatal: unable to access 'https://github.com/projectdiscovery/nuclei-templates/'", clone),
+        (lambda c: "nuclei" in " ".join(map(str, c)) and "-as" in c, 1, "[FTL] Could not run nuclei: no templates provided for scan", None),
+        (lambda c: "nuclei" in " ".join(map(str, c)) and "-u" in c, 1, "[FTL] Could not run nuclei: no templates provided for scan", scan),
+    ])
+    s.scan_dast()
+    return s
+
+
+def test_nuclei_clones_its_templates_when_the_update_was_rate_limited(tmp_path, monkeypatch):
+    s = _nuclei_dast(tmp_path, monkeypatch, clone_ok=True)
+    assert any(c[:2] == ["git", "clone"] for c in s.run.calls)
+    runs = [c for c in s.run.calls if "-u" in c and any("nuclei" in str(x) for x in c)]
+    assert runs[-1][runs[-1].index("-t") + 1] == "/root/nuclei-templates"
+    assert not any(r["status"] == "error" for r in s.stages if r["tool"].startswith("Nuclei")), s.stages
+    # second scan: templates already there, no clone
+    s.run.calls.clear()
+    assert s.nuclei_templates() and not s.run.calls
+
+
+def test_nuclei_templates_that_cannot_be_installed_say_why(tmp_path, monkeypatch):
+    s = _nuclei_dast(tmp_path, monkeypatch, clone_ok=False)
+    errs = [r for r in s.stages if r["tool"] == "Nuclei templates"]
+    assert errs and "could not be installed" in errs[0]["reason"] and "unable to access" in errs[0]["reason"]
