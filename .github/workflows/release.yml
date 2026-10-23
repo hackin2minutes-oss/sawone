@@ -7,7 +7,7 @@ name: release
 
 on:
   push:
-    tags: ["v*"]
+    tags: ["v*.*.*"] # releases only: moving the v1 tag does not rebuild
   schedule:
     - cron: "23 2 * * 1"
   workflow_dispatch:

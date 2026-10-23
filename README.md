@@ -9,8 +9,20 @@ and produces one pass/fail decision with SARIF, JUnit, a PDF report and complian
 jobs:
   scan:
     permissions: { contents: read, actions: read, security-events: write }
-    uses: hackin2minutes-oss/sawone/.github/workflows/sawone-scan.yml@<commit-sha>
+    uses: hackin2minutes-oss/sawone/.github/workflows/sawone-scan.yml@v1
 ```
+
+Or as a single step (GitHub Marketplace: **Sawone DevSecOps Scanner**):
+
+```yaml
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hackin2minutes-oss/sawone@v1
+```
+
+**Versions:** `@v1` follows the latest 1.x release; `@v1.3.4` (or later) stays on that release. Releases are
+immutable from 1.3.4: a version tag can never be moved or deleted, and `v1` can only be moved by the
+maintainers. Pinning a commit SHA remains the strictest option.
 
 No configuration is needed. `.sawone.yml` changes defaults (`.sawone.example.yml`);
 `.sawone-baseline.yml` records accepted risks.

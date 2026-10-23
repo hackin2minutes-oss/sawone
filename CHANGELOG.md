@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.3.4 — Locked releases
+
+- Releases are immutable from this version on: a release's tag can never be moved or deleted, and GitHub
+  publishes a release attestation. Use the action by version (`@v1.3.4`) or by major version (`@v1`).
+- The release workflow runs for version tags only (`v1.2.3`): moving the `v1` tag no longer starts a
+  duplicate image build.
+
 ## 1.3.3 — GitHub Marketplace
 
 - The action is listed on GitHub Marketplace as "Sawone DevSecOps Scanner" ("Sawone" is taken there) with a
