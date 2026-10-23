@@ -57,8 +57,9 @@ jobs:
             v="${GITHUB_REF#refs/tags/v}"
             tags="$img:latest,$img:$day,$img:$v,$img:${v%%.*}"
           elif [ "$GITHUB_EVENT_NAME" = schedule ]; then
-            # scheduled rebuilds refresh the current major line from its latest release tag
-            tags="$img:latest,$img:$day,$img:2"
+            # scheduled rebuilds refresh the major line of the release tag they rebuilt (checked out above)
+            v="$(git describe --tags --exact-match HEAD)"; v="${v#v}"
+            tags="$img:latest,$img:$day,$img:${v%%.*}"
           else
             # manual runs from a branch never move the release tags consumers rely on
             tags="$img:edge,$img:edge-$day"

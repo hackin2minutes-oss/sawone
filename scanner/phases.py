@@ -45,6 +45,16 @@ ELSEWHERE = {"release": "sawone-release.yml (signing, SBOM attestation, SLSA pro
              "monitor": "sawone-monitor.yml (daily rescan of running images)"}
 
 
+try:
+    import sawprofile as _profile   # noqa: E402  (product profile: extra stages)
+    for _s in _profile.STAGES:
+        STAGE_PHASE[_s["id"]] = _s["phase"]
+    INTROS.update(_profile.PROFILE.get("phase_intros") or {})
+    ELSEWHERE.update(_profile.PROFILE.get("elsewhere") or {})
+except ImportError:  # pragma: no cover
+    pass
+
+
 def phase_of(stage):
     return STAGE_PHASE.get(stage, "release" if stage in ("scanner", "pr") else "build")
 

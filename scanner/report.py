@@ -38,6 +38,7 @@ try:
 except ImportError:  # pragma: no cover — report.py copied on its own
     AR = {}
 import phases as PH  # noqa: E402  (same directory as this script)
+import sawprofile as PROF  # noqa: E402  (product profile: extra stages, brand)
 
 LANG = "en"
 
@@ -117,6 +118,21 @@ STAGE_INFO = {
 }
 DETAIL_STAGES = ["threat-model", "secrets", "sast", "sca", "licences", "iac", "kubernetes", "cicd",
                  "container", "dast", "iast", "runtime", "tracking"]
+# a product profile (SawOne-A) adds its own stages, their wording and translations
+for _s in PROF.STAGES:
+    STAGE_INFO[_s["id"]] = (_s.get("title") or _s["id"], _s.get("intro") or "")
+    if _s.get("title_ar"):
+        AR[re.sub(r"\s+", " ", _s.get("title") or _s["id"]).strip()] = _s["title_ar"]
+    if _s.get("intro_ar") and _s.get("intro"):
+        AR[re.sub(r"\s+", " ", _s["intro"]).strip()] = _s["intro_ar"]
+DETAIL_STAGES = PROF.insert_stages(DETAIL_STAGES)
+AR.update({re.sub(r"\s+", " ", k).strip(): v for k, v in (PROF.PROFILE.get("translations") or {}).items()})
+for _ph, _txt in (PROF.PROFILE.get("phase_intros_ar") or {}).items():
+    if PH.INTROS.get(_ph):
+        AR[re.sub(r"\s+", " ", PH.INTROS[_ph]).strip()] = _txt
+if PROF.PROFILE.get("report_title") and PROF.PROFILE.get("report_title_ar"):
+    AR[re.sub(r"\s+", " ", PROF.PROFILE["report_title"]).strip()] = PROF.PROFILE["report_title_ar"]
+REPORT_TITLE = PROF.PROFILE.get("report_title") or "Application Security<br/>Assessment Report"
 GATE_ORDER = ["policy", "pipeline", "scanner"] + DETAIL_STAGES
 
 # SARIF category (from automationDetails "sawone/<category>/<n>/") for each tool, used when a tool's
@@ -814,7 +830,7 @@ class Report:
         rows = "".join(f"<tr><th>{esc(T(k))}</th><td>{esc(v)}</td></tr>" for k, v in meta)
         return (f'<section class="cover"><div class="band"></div><div class="inner">'
                 f'<div class="brand">Sawone</div>'
-                f'<h1>{T("Application Security<br/>Assessment Report")}</h1>'
+                f'<h1>{T(REPORT_TITLE)}</h1>'
                 f'<div class="subtitle">{esc(d.repo)}</div>'
                 f'<div class="verdict {cls}">{word} — {esc(txt)}</div>'
                 f'<table class="meta">{rows}</table></div>'
@@ -919,7 +935,7 @@ class Report:
         for ph in PH.PHASES:
             n = sum(1 for f in blocking if any(PH.phase_of(s) == ph for s in (f.get("stages") or [f.get("stage")])))
             if st[ph] == "elsewhere":
-                sub = T("by {w}", w=PH.ELSEWHERE[ph].split(" ")[0])
+                sub = T("by {w}", w=T(PH.ELSEWHERE[ph].split(" (")[0]))
             elif st[ph] == "notsel":
                 sub = T("not in this run")
             elif ph == "release":
@@ -930,8 +946,8 @@ class Report:
                        T("check failed") if st[ph] in ("failed", "error") else T("nothing blocking"))
             cells.append(f'<td class="ph ph-{st[ph]}"><div class="ph-n">{esc(T(PH.TITLES[ph]))}</div>'
                          f'{status_pill(st[ph])}<div class="ph-s">{esc(sub)}</div></td>')
-        legend = T("Plan, code, build and test run in this scan; release is the gate decision; deploy and monitor "
-                   "run in their own workflows; operate is the WAF test.")
+        legend = T(PROF.PROFILE.get("lifecycle_note") or "Plan, code, build and test run in this scan; release is the "
+                   "gate decision; deploy and monitor run in their own workflows; operate is the WAF test.")
         return f'<table class="lifecycle"><tr>{"".join(cells)}</tr></table>' + note(esc(legend))
 
     def actions(self):
@@ -1857,9 +1873,11 @@ class Report:
         css = CSS.replace("__REPO__", re.sub(r'["\\\n]', "", self.d.repo)) + SLA_CSS
         if LANG == "ar":
             css += RTL_CSS + PAGE_AR
-        return (f'<!doctype html><html lang="{LANG}" dir="{"rtl" if LANG == "ar" else "ltr"}"><head><meta charset="utf-8"/>'
+        page = (f'<!doctype html><html lang="{LANG}" dir="{"rtl" if LANG == "ar" else "ltr"}"><head><meta charset="utf-8"/>'
                 f'<title>Security Assessment — {esc(self.d.repo)}</title><style>{css}</style></head>'
                 f'<body>{doc}</body></html>')
+        # a product built on the engine carries its own name (workflow file names are lower case and stay)
+        return page.replace("Sawone", PROF.BRAND) if PROF.BRAND != "Sawone" else page
 
 
 def build(reports: Path, lang="en"):

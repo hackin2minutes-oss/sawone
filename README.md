@@ -381,6 +381,14 @@ with the workspace visible to it.
 | Release: publish, sign, SBOM attestation, provenance | `validate.yml` on pushes to `main` |
 | **Not** tested automatically | the deploy step, DefectDojo and DongTai (need servers), the monitor workflow (needs published images), the PR comment (needs a PR from this repo), the dashboard workflow, the GitLab and Azure DevOps templates (syntax-checked only) |
 
+## Building on the engine
+
+Other products reuse Sawone's engine (phases, threat model, risk policy, merge, report, Arabic PDF) through a
+profile: `SAWONE_PROFILE` points to a YAML file that adds stages, their phase and wording, Semgrep rules,
+compliance controls and a brand (see `scanner/sawprofile.py`). The product's scanner subclasses `Scan`
+(overriding `steps()`) and calls `sawone_scan.main(MyScan)`; its image is built `FROM` a Sawone release.
+[SawOne-A](https://github.com/hackin2minutes-oss/sawone-a) (Android) is built this way.
+
 ## Releasing
 
 1. Push this repo, then tag: `git tag v1.0.0 && git push origin v1.0.0`. `release.yml` resolves

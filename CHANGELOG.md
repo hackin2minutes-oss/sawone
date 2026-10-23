@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.3.0 — An engine other products can build on
+
+- Product profiles (`SAWONE_PROFILE`): a product built on the engine adds its own stages (phase, position,
+  English and Arabic wording), Semgrep rule files, compliance controls, evidence files, phase introductions and
+  its brand and report title. Without a profile nothing changes. SawOne-A (Android) is the first.
+- `Scan.steps()` and `main(scan_class=...)`: a product subclasses the scan and reuses the whole command line.
+- `semgrep.rules` in `.sawone.yml`: your own Semgrep rule files or directories next to the registry packs.
+- `Scan.run(env=...)`: secrets for a command travel in its environment only (never on the logged command line).
+- Fix: the Monday rebuild published the scanner as `:2` instead of the major version of the release it rebuilt.
+
 ## 1.2.0 — Phase-wise scans and reports
 
 - Every stage belongs to a DevSecOps phase: Plan (threat model), Code (secrets, SAST), Build (dependencies,

@@ -35,6 +35,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import findings as F
 import phases as PH  # noqa: E402
+import sawprofile as PROF  # noqa: E402
 import threatmodel as TMA  # noqa: E402
 
 try:
@@ -86,7 +87,7 @@ DEFAULTS = {
     "report": {"profile": "balanced", "languages": ["en", "ar"]},
     "noise": {"mute_rules": []},            # rule IDs hidden from the report (report-only tools; never gates)
     "sla": {"CRITICAL": 7, "HIGH": 30, "MEDIUM": 90, "LOW": 180},   # days to fix, from first seen
-    "compliance": {"frameworks": ["asvs", "ssdf", "ecc", "cscc", "ccc", "sama", "pdpl"]},
+    "compliance": {"frameworks": PROF.PROFILE.get("frameworks") or ["asvs", "ssdf", "ecc", "cscc", "ccc", "sama", "pdpl"]},
     "source_sbom": {"enabled": True},       # Syft: CycloneDX SBOM of the repository itself
     "waf": {"enabled": True},
     "threat_model": {"min_severity": "Very High"},
@@ -149,8 +150,8 @@ CI_FILES = {".gitlab-ci.yml": "gitlab", "Jenkinsfile": "jenkins", "azure-pipelin
             "bitbucket-pipelines.yml": "bitbucket", ".circleci/config.yml": "circleci"}
 
 SEV_ORDER = ["UNKNOWN", "LOW", "MEDIUM", "HIGH", "CRITICAL"]
-STAGES = ["threat-model", "secrets", "sast", "sca", "iac", "kubernetes", "cicd",
-          "container", "dast", "iast", "runtime", "tracking"]
+STAGES = PROF.insert_stages(["threat-model", "secrets", "sast", "sca", "iac", "kubernetes", "cicd",
+                             "container", "dast", "iast", "runtime", "tracking"])
 PIP_TOOLS = ["semgrep", "zizmor", "pytm"]
 
 
@@ -201,10 +202,13 @@ class Scan:
             os.chmod(d, 0o777)
 
     # ---------------------------------------------------------------- process
-    def run(self, cmd, log_name=None, timeout=3600, quiet=False, stdout_file=None):
+    def run(self, cmd, log_name=None, timeout=3600, quiet=False, stdout_file=None, env=None):
+        """env: extra environment for this command only (for secrets passed as `-e NAME`: the value never
+        appears on the command line or in the log)."""
         stdout = ""
         try:
-            p = subprocess.run(cmd, cwd=self.ws, capture_output=True, text=True, timeout=timeout)
+            p = subprocess.run(cmd, cwd=self.ws, capture_output=True, text=True, timeout=timeout,
+                               env={**os.environ, **env} if env else None)
             stdout = p.stdout
             out = p.stdout + ("\n" + p.stderr if p.stderr else "")
             code = p.returncode
@@ -259,6 +263,13 @@ class Scan:
                             "gate": gate, "findings": findings})
         icon = {"passed": "✓", "failed": "✗", "skipped": "-", "error": "!", "report": "i"}.get(status, "?")
         log(f"{icon} {stage:<18} {tool:<26} {status}{(' — ' + reason) if reason else ''}{(' · ' + findings) if findings else ''}")
+
+    def steps(self):
+        """The stages this scanner runs, in order: (stage, method). A product built on the engine overrides it."""
+        return [("threat-model", self.scan_threat_model), ("secrets", self.scan_secrets), ("sast", self.scan_sast),
+                ("sca", self.scan_sca), ("iac", self.scan_iac), ("kubernetes", self.scan_k8s),
+                ("cicd", self.scan_cicd), ("container", self.scan_containers), ("dast", self.scan_dast),
+                ("iast", self.scan_iast), ("runtime", self.scan_waf), ("tracking", self.defectdojo)]
 
     def skipped(self, name):
         return name in self.cfg.get("skip", [])
@@ -638,6 +649,8 @@ class Scan:
 
     # ---- secrets
     def scan_secrets(self):
+        if self.skipped("gitleaks") and self.skipped("trufflehog"):
+            return self.record("secrets", "Gitleaks, TruffleHog", "skipped", "skipped by config", gate=False)
         sarif = self.reports / "sarif" / "gitleaks.sarif"
         if not self.skipped("gitleaks"):
             args = ["detect", "--source", str(self.ws), "--redact", "--no-banner", "--report-format", "sarif",
@@ -723,12 +736,24 @@ class Scan:
                     packs.append(p)
         return packs + list(c.get("extra_configs", []))
 
+    def local_rules(self):
+        """Extra Semgrep rules kept as files: the product profile's and semgrep.rules in the config (relative to
+        the scanned path). Missing paths are reported, not silently dropped."""
+        out = []
+        for r in list(PROF.PROFILE.get("semgrep_rules") or []) + list(self.cfg["semgrep"].get("rules") or []):
+            p = Path(r) if Path(r).is_absolute() else self.ws / r
+            if p.exists():
+                out.append(str(p))
+            else:
+                log(f"  semgrep: rule path {r} not found; ignored")
+        return out
+
     def scan_sast(self):
         if self.skipped("semgrep"):
             return self.record("sast", "Semgrep CE", "skipped", "skipped by config", gate=False)
         if not self.inv["languages"]:
             return self.record("sast", "Semgrep CE", "skipped", "no source code detected", gate=False)
-        configs = self.semgrep_configs()
+        configs = self.semgrep_configs() + self.local_rules()
         sarif, js = self.reports / "sarif" / "semgrep.sarif", self.reports / "raw" / "semgrep.json"
 
         def go(cfgs, log_name="semgrep"):
@@ -1561,17 +1586,14 @@ class Scan:
         log("stages: " + (", ".join(s for s in STAGES if self.wants(s))))
         log("plan: tools " + ", ".join(self.needed_tools()))
         if self.wants("sast"):
-            log("plan: semgrep rules " + " ".join(self.semgrep_configs()))
+            log("plan: semgrep rules " + " ".join(self.semgrep_configs() + self.local_rules()))
         if self.plan_only:
             return 0
         if not self.docker_ok:
             log("ERROR: Docker is not available. Mount the Docker socket (-v /var/run/docker.sock:/var/run/docker.sock).")
             self.record("scanner", "docker", "error", "Docker not available")
             return self.write_outputs()
-        steps = [("threat-model", self.scan_threat_model), ("secrets", self.scan_secrets), ("sast", self.scan_sast),
-                 ("sca", self.scan_sca), ("iac", self.scan_iac), ("kubernetes", self.scan_k8s),
-                 ("cicd", self.scan_cicd), ("container", self.scan_containers), ("dast", self.scan_dast),
-                 ("iast", self.scan_iast), ("runtime", self.scan_waf), ("tracking", self.defectdojo)]
+        steps = self.steps()
         try:
             try:
                 self.prepare_policy()
@@ -1651,6 +1673,10 @@ def compliance_status(stages, mapping=None, frameworks=None):
     (mapped stages ran clean), not assessed (none of its stages ran). frameworks limits the set."""
     if mapping is None:
         mapping = load_yaml_file(HERE / "defaults" / "compliance.yml") or {}
+        extra = load_yaml_file(PROF.PROFILE["compliance"]) if PROF.PROFILE.get("compliance") else None
+        if extra:
+            mapping = {"frameworks": {**(mapping.get("frameworks") or {}), **(extra.get("frameworks") or {})},
+                       "controls": list(mapping.get("controls") or []) + list(extra.get("controls") or [])}
     if frameworks:
         mapping = dict(mapping, controls=[c for c in mapping.get("controls", []) if c["framework"] in frameworks])
     by_stage = {}
@@ -1727,6 +1753,8 @@ EVIDENCE_FILES = {
     "runtime": ["waf-results.txt"],
     "policy": ["raw/**/baseline.json"],
 }
+for _st, _globs in (PROF.PROFILE.get("evidence") or {}).items():
+    EVIDENCE_FILES[_st] = list(EVIDENCE_FILES.get(_st, [])) + list(_globs)
 COMMON_EVIDENCE = ["summary.json", "findings.json", "findings-consolidated.json", "tools.json", "junit.xml"]
 
 
@@ -1849,7 +1877,7 @@ def render_outputs(reports, summary):
     result = ("✅ all gates passed" if summary["passed"] else
               "❌ " + ", ".join(x for x in [f"{len(failed)} gate(s) failed" if failed else "",
                                             f"{len(errors)} scanner error(s)" if errors else ""] if x))
-    md = ["## Sawone scan", "", f"**Result:** {result}" + ("" if enforce else " _(report-only mode)_"), ""]
+    md = [f"## {PROF.BRAND} scan", "", f"**Result:** {result}" + ("" if enforce else " _(report-only mode)_"), ""]
     try:
         sel = PH.parse(summary.get("phases"))
     except ValueError:
@@ -2018,8 +2046,9 @@ def load_lock(value, ws):
     return data
 
 
-def main():
-    ap = argparse.ArgumentParser(description="Sawone scanner")
+def main(scan_class=None, description="Sawone scanner"):
+    """The command line. A product built on the engine passes its own Scan subclass (scan_class)."""
+    ap = argparse.ArgumentParser(description=description)
     ap.add_argument("--path", default=os.environ.get("SCAN_PATH", "."))
     ap.add_argument("--config", default=os.environ.get("SCAN_CONFIG", ".sawone.yml"))
     ap.add_argument("--reports", default=os.environ.get("SCAN_REPORTS", "sawone-reports"))
@@ -2140,7 +2169,7 @@ def main():
     if reports.exists():
         shutil.rmtree(reports)
     reports.mkdir(parents=True)
-    sys.exit(Scan(ws, reports, cfg, plan_only=a.plan_only).main())
+    sys.exit((scan_class or Scan)(ws, reports, cfg, plan_only=a.plan_only).main())
 
 
 if __name__ == "__main__":

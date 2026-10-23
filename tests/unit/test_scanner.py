@@ -45,7 +45,7 @@ class FakeRun:
     def __init__(self, scan, rules):
         self.scan, self.rules, self.calls = scan, rules, []
 
-    def __call__(self, cmd, log_name=None, timeout=3600, quiet=False, stdout_file=None):
+    def __call__(self, cmd, log_name=None, timeout=3600, quiet=False, stdout_file=None, env=None):
         self.calls.append(cmd)
         for match, code, out, effect in self.rules:
             if match(cmd):
