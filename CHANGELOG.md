@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.4.0 — Product report sections
+
+- Extension point: profiles can now declare `report_sections` in `profile.yml` to inject
+  dedicated product chapters (e.g. AI security profile) into the English and Arabic
+  PDF/HTML report.
+
 ## 1.3.4 — Locked releases
 
 - Releases are immutable from this version on: a release's tag can never be moved or deleted, and GitHub

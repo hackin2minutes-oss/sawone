@@ -15,6 +15,8 @@ SAWONE_PROFILE points to a YAML or JSON file. Without it, nothing changes. A pro
   phase_intros_ar: {test: "..."}
   elsewhere: {deploy: "store release (Play Console)", monitor: "..."}   # phases done outside the scan
   translations: {"English text": "Arabic text"}             # extra report strings
+  report_sections:                                           # the product's own report chapters
+    - {module: ai/report_section.py, after: details}         # module defines section(report, R) -> HTML
 """
 import json
 import os
@@ -47,12 +49,31 @@ def load(path=None):
         data["semgrep_rules"] = [str(base / r) if not Path(r).is_absolute() else r for r in data["semgrep_rules"]]
     if data.get("compliance") and not Path(data["compliance"]).is_absolute():
         data["compliance"] = str(base / data["compliance"])
+    for sec in data.get("report_sections") or []:
+        if not isinstance(sec, dict) or not sec.get("module"):
+            raise SystemExit(f"ERROR: SAWONE_PROFILE {path}: every report section needs a module")
+        if not Path(sec["module"]).is_absolute():
+            sec["module"] = str(base / sec["module"])
     return data
 
 
 PROFILE = load()
 BRAND = PROFILE.get("brand") or "Sawone"
 STAGES = PROFILE.get("stages") or []
+
+
+def report_sections():
+    """{section name: [callable(report, R) -> HTML]}: the product's chapters, each after the section it names
+    (one of SECTION_ORDER in report.py; an unknown or missing anchor puts it before the appendices)."""
+    import importlib.util
+    out = {}
+    for i, sec in enumerate(PROFILE.get("report_sections") or []):
+        spec = importlib.util.spec_from_file_location(f"sawprofile_section_{i}", sec["module"])
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        fn = getattr(mod, sec.get("function") or "section")
+        out.setdefault(sec.get("after") or "supply_chain", []).append(fn)
+    return out
 
 
 def insert_stages(order, stages=None):

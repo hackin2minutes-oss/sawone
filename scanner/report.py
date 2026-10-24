@@ -30,6 +30,7 @@ import html
 import json
 import os
 import re
+import sys
 from collections import Counter, defaultdict
 from pathlib import Path
 
@@ -1866,9 +1867,19 @@ class Report:
         return "".join(out)
 
     # ---------------------------------------------------------------- assemble
+    SECTION_ORDER = ["executive", "scope", "gates", "risk_ranked", "trend", "details", "compliance", "baseline",
+                     "supply_chain", "appendices"]
+
     def build(self):
-        body = [self.executive(), self.scope(), self.gates(), self.risk_ranked(), self.trend(), self.details(),
-                self.compliance(), self.baseline(), self.supply_chain(), self.appendices()]
+        extra = PRODUCT_SECTIONS
+        known = set(self.SECTION_ORDER[:-1])
+        orphans = [fn for k, fns in extra.items() if k not in known for fn in fns]
+        body = []
+        for name in self.SECTION_ORDER:
+            if name == "appendices":        # chapters anchored to an unknown section go before the appendices
+                body += [self._product_section(fn) for fn in orphans]
+            body.append(getattr(self, name)())
+            body += [self._product_section(fn) for fn in extra.get(name, [])] if name in known else []
         doc = self.cover() + self.contents() + "".join(body)
         css = CSS.replace("__REPO__", re.sub(r'["\\\n]', "", self.d.repo)) + SLA_CSS
         if LANG == "ar":
@@ -1878,6 +1889,23 @@ class Report:
                 f'<body>{doc}</body></html>')
         # a product built on the engine carries its own name (workflow file names are lower case and stay)
         return page.replace("Sawone", PROF.BRAND) if PROF.BRAND != "Sawone" else page
+
+
+    def _product_section(self, fn):
+        """A chapter from the product profile. It must never cost the run its report."""
+        try:
+            return fn(self, sys.modules[__name__]) or ""
+        except Exception as e:  # noqa: BLE001
+            print(f"report: product section {getattr(fn, '__module__', fn)} failed: {type(e).__name__}: {e}",
+                  file=sys.stderr)
+            return note(esc(T("A product section could not be rendered: {e}", e=f"{type(e).__name__}: {e}")))
+
+
+try:
+    PRODUCT_SECTIONS = PROF.report_sections()
+except Exception as _e:  # noqa: BLE001 — a broken section module must not stop the report
+    print(f"report: product sections not loaded: {_e}", file=sys.stderr)
+    PRODUCT_SECTIONS = {}
 
 
 def build(reports: Path, lang="en"):

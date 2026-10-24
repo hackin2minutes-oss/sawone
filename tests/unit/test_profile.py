@@ -95,3 +95,32 @@ s.render_outputs(Path({str(r)!r}), {{"stages": [{{"stage": "sast", "tool": "Semg
 print(Path({str(r)!r}, "summary.md").read_text().splitlines()[0])
 """, prof, tmp_path)
     assert out.strip().endswith("## SawOne-A scan")
+
+
+def test_a_profile_adds_report_chapters_in_place(tmp_path):
+    (tmp_path / "sec.py").write_text(
+        "def section(rep, R):\n"
+        "    return rep.h1('AI security profile', 'ai') + '<p>' + R.T('Models found') + ' ' + R.esc(rep.d.repo) + '</p>'\n"
+        "def broken(rep, R):\n"
+        "    raise ValueError('boom')\n")
+    prof = tmp_path / "p.yml"
+    prof.write_text("brand: SawOne-SI\nreport_sections:\n  - {module: sec.py, after: details}\n"
+                    "  - {module: sec.py, function: broken, after: compliance}\n"
+                    "translations: {\"Models found\": \"النماذج\"}\n")
+    r = tmp_path / "r"
+    r.mkdir()
+    (r / "findings.json").write_text("[]")
+    (r / "findings-consolidated.json").write_text("[]")
+    (r / "summary.json").write_text(json.dumps({"repository": "acme/ai", "stages": [
+        {"stage": "sast", "tool": "Semgrep CE", "status": "passed", "gate": True, "findings": "0"}]}))
+    html = run(f"""
+import report
+from pathlib import Path
+print(report.build(Path({str(r)!r}), "en")); print("=====AR====="); print(report.build(Path({str(r)!r}), "ar"))
+""", prof, tmp_path)
+    en, ar = html.split("=====AR=====")
+    assert en.index('id="details"') < en.index('id="ai"') < en.index('id="compliance"') if 'id="compliance"' in en \
+        else en.index('id="details"') < en.index('id="ai"')
+    assert "Models found acme/ai" in en and "AI security profile" in en and 'href="#ai"' in en
+    assert "A product section could not be rendered: ValueError: boom" in en          # never costs the report
+    assert "النماذج" in ar
