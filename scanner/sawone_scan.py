@@ -195,11 +195,21 @@ class Scan:
         self.cache_dir = cfg.get("cache_dir")  # host dir for vulnerability DBs (shared via CI cache)
         # pull requests: the base commit, so secret and code scans look only at what the change adds
         self.base_sha = cfg.get("base_sha") if re.fullmatch(r"[0-9a-f]{7,40}", str(cfg.get("base_sha") or "")) else None
-        for d in ["sarif", "raw", "logs"]:
+        for d in ["sarif", "raw", "logs", "evidence"]:
             (reports / d).mkdir(parents=True, exist_ok=True)
+        # Pre-initialize trufflehog exclude file so consumers never fail on missing file
+        excl = reports / "raw" / "trufflehog-exclude.txt"
+        if not excl.exists():
+            try:
+                excl.write_text(re.escape(str(reports)) + "\n" + r".*/\.git/.*" + "\n")
+            except OSError:
+                pass
         # some scanner images run as non-root: let them write their reports
-        for d in [reports, reports / "sarif", reports / "raw", reports / "logs"]:
-            os.chmod(d, 0o777)
+        for d in [reports, reports / "sarif", reports / "raw", reports / "logs", reports / "evidence"]:
+            try:
+                os.chmod(d, 0o777)
+            except OSError:
+                pass
 
     # ---------------------------------------------------------------- process
     def run(self, cmd, log_name=None, timeout=3600, quiet=False, stdout_file=None, env=None):
@@ -231,6 +241,10 @@ class Scan:
         cmd = ["docker", "run", "--rm"]
         if mount:
             cmd += ["-v", f"{self.ws}:{self.ws}", "-w", str(self.ws)]
+            try:
+                self.reports.resolve().relative_to(self.ws.resolve())
+            except ValueError:
+                cmd += ["-v", f"{self.reports}:{self.reports}"]
         cmd += (extra or []) + [image] + list(args)
         return self.run(cmd, log_name=log_name, timeout=timeout, stdout_file=stdout_file)
 
@@ -733,10 +747,10 @@ class Scan:
         if c.get("configs"):
             return c["configs"]
         packs = ["p/default"]
-        keys = list(self.inv["languages"]) + self.inv["frameworks"]
-        if self.inv["dockerfiles"]:
+        keys = list(self.inv.get("languages", {})) + list(self.inv.get("frameworks", []))
+        if self.inv.get("dockerfiles"):
             keys.append("docker")
-        if self.inv["kubernetes"]:
+        if self.inv.get("kubernetes"):
             keys.append("kubernetes")
         for k in keys:
             for p in SEMGREP_PACKS.get(k, []):
@@ -867,7 +881,8 @@ class Scan:
                 self.sarif_tag(sarif, "trivy-sca")
         if self.inv["manifests"] and self.cfg["source_sbom"]["enabled"] and "syft" in self.pinned:
             sbom = self.reports / "raw" / "sbom-source.cdx.json"
-            code, _ = self.docker("syft", [f"dir:{self.ws}", "--exclude", f"./{self.reports.name}/**",
+            source_name = os.environ.get("GITHUB_REPOSITORY") or self.ws.name
+            code, _ = self.docker("syft", [f"dir:{self.ws}", "--source-name", source_name, "--exclude", f"./{self.reports.name}/**",
                                            "-o", f"cyclonedx-json={sbom}"], "syft-source")
             if code or not load_json(sbom):
                 self.record("sca", "Syft (source SBOM)", "error", self.last_error("syft-source"))
@@ -1037,8 +1052,9 @@ class Scan:
         name, tag, label = img["name"], img["tag"], img["dockerfile"]
         tar = self.reports / "raw" / f"{name}.tar"
         code, _ = self.run(["docker", "save", "-o", str(tar), tag], log_name=f"save-{name}")
-        if code:
-            return self.record("container", f"image ({label})", "error", self.last_error(f"save-{name}"))
+        if code or not tar.exists() or tar.stat().st_size == 0:
+            return self.record("container", f"image ({label})", "error",
+                               f"failed to save image archive {tar.name}: {self.last_error(f'save-{name}')}")
         # pip's embedded SBOM: ignore it only when pip is verifiably gone from the image
         skip = []
         has_pip = self.run(["docker", "run", "--rm", "--entrypoint", "sh", tag, "-c",
@@ -1086,32 +1102,34 @@ class Scan:
                         extra=["-u", "0:0", *self.cache_mount("grype", "/grype-db"), "-e", "GRYPE_DB_CACHE_DIR=/grype-db",
                                "-e", "GRYPE_DB_AUTO_UPDATE=false"])
             self.sarif_tag(gsarif, f"grype-{name}")
-        comps = sbom_packages(load_json(sbom))
-        gdata = load_json(gjson)
-        if gdata is None:
-            self.record("container", f"Grype ({label})", "error", self.last_error(f"grype-{name}"))
+            comps = sbom_packages(load_json(sbom))
+            gdata = load_json(gjson)
+            if gdata is None:
+                self.record("container", f"Grype ({label})", "error", self.last_error(f"grype-{name}"))
+            else:
+                hits = [m for m in gdata.get("matches", []) or []
+                        if str((m.get("vulnerability") or {}).get("severity", "")).upper() in self.sev
+                        and ((m.get("vulnerability") or {}).get("fix") or {}).get("state") == "fixed"]
+                ids = sorted({(m.get("vulnerability") or {}).get("id") for m in hits})
+                items = []
+                for m in gdata.get("matches", []) or []:
+                    v, a = m.get("vulnerability") or {}, m.get("artifact") or {}
+                    related = [x.get("id") for x in m.get("relatedVulnerabilities") or [] if x.get("id")]
+                    vid = v.get("id", "")
+                    cve = vid if vid.upper().startswith("CVE-") else next((x for x in related if x.upper().startswith("CVE-")), vid)
+                    sev = str(v.get("severity", "")).upper()
+                    fixed = (v.get("fix") or {}).get("state") == "fixed"
+                    gloc = ((a.get("locations") or [{}])[0] or {}).get("path") or ""
+                    items.append(F.vuln("container", f"Grype ({label})", cve, a.get("name"), a.get("version"), sev,
+                                        ", ".join((v.get("fix") or {}).get("versions") or []),
+                                        f'{a.get("type") or "package"}: {gloc}' if gloc else (a.get("type") or label),
+                                        (v.get("description") or cve)[:200], gating=sev in self.sev and fixed,
+                                        aliases=[vid, *related]))
+                self.gate("container", f"Grype ({label})", len(hits),
+                          f"SBOM {comps} components · {len(hits)} fixable {'/'.join(self.sev)} ({len(ids)} unique CVEs)", items=items)
         else:
-            hits = [m for m in gdata.get("matches", []) or []
-                    if str((m.get("vulnerability") or {}).get("severity", "")).upper() in self.sev
-                    and ((m.get("vulnerability") or {}).get("fix") or {}).get("state") == "fixed"]
-            ids = sorted({(m.get("vulnerability") or {}).get("id") for m in hits})
-            items = []
-            for m in gdata.get("matches", []) or []:
-                v, a = m.get("vulnerability") or {}, m.get("artifact") or {}
-                related = [x.get("id") for x in m.get("relatedVulnerabilities") or [] if x.get("id")]
-                vid = v.get("id", "")
-                cve = vid if vid.upper().startswith("CVE-") else next((x for x in related if x.upper().startswith("CVE-")), vid)
-                sev = str(v.get("severity", "")).upper()
-                fixed = (v.get("fix") or {}).get("state") == "fixed"
-                gloc = ((a.get("locations") or [{}])[0] or {}).get("path") or ""
-                items.append(F.vuln("container", f"Grype ({label})", cve, a.get("name"), a.get("version"), sev,
-                                    ", ".join((v.get("fix") or {}).get("versions") or []),
-                                    f'{a.get("type") or "package"}: {gloc}' if gloc else (a.get("type") or label),
-                                    (v.get("description") or cve)[:200], gating=sev in self.sev and fixed,
-                                    aliases=[vid, *related]))
-            self.gate("container", f"Grype ({label})", len(hits),
-                      f"SBOM {comps} components · {len(hits)} fixable {'/'.join(self.sev)} ({len(ids)} unique CVEs)", items=items)
-        if "dockle" in self.pinned:
+            self.record("container", f"Grype ({label})", "skipped", "SBOM generation failed; skipping Grype scan", gate=False)
+        if "dockle" in self.pinned and tar.exists() and tar.stat().st_size > 0:
             self._dockle(tar, label, name)
         try:
             tar.unlink()
@@ -1156,6 +1174,9 @@ class Scan:
         until it answers. Returns the target dict, or None after recording why (skip or error)."""
         if self.target:
             return self.target
+        if getattr(self, "app_failed", False):
+            self.record(stage, "—", "skipped", "app startup failed in earlier stage", gate=False)
+            return None
         images = self.collect_images()
         if not images:
             self.record(stage, "—", "skipped", "no image to run (no Dockerfile and no SCAN_IMAGE)", gate=False)
@@ -1173,8 +1194,22 @@ class Scan:
             if os.environ.get("DONGTAI_TOKEN"):
                 envs += ["-e", "DONGTAI_TOKEN"]
             self.iast_attached = True
-        self.run(["docker", "run", "-d", "--name", f"{self.network}-app", "--network-alias", "app",
-                  "--network", self.network, *envs, img["tag"]], log_name="app-start")
+        cname = f"{self.network}-app"
+        self.run(["docker", "rm", "-f", cname], quiet=True)
+        start_code, _ = self.run(["docker", "run", "-d", "--name", cname, "--network-alias", "app",
+                                  "--network", self.network, *envs, img["tag"]], log_name="app-start")
+        if start_code != 0:
+            self.app_failed = True
+            self.record(stage, "app startup", "error", f"app container failed to start: {self.last_error('app-start')}")
+            return None
+        time.sleep(1)
+        check_code, check_out = self.run(["docker", "inspect", "-f", "{{.State.Running}}", cname], quiet=True)
+        if check_out.strip() != "true":
+            self.app_failed = True
+            self.run(["docker", "logs", cname], log_name="app-logs")
+            self.record(stage, "app startup", "error",
+                        f"app container stopped unexpectedly after start (see logs/app-logs.log)")
+            return None
         health = d.get("health_path")
         candidates = [health] if health else ["/health", "/healthz", "/actuator/health", "/ready", "/"]
         base, found = f"http://app:{port}", None
@@ -1188,7 +1223,8 @@ class Scan:
             if not found:
                 time.sleep(2)
         if not found:
-            self.run(["docker", "logs", f"{self.network}-app"], log_name="app-logs")
+            self.app_failed = True
+            self.run(["docker", "logs", cname], log_name="app-logs")
             self.record(stage, "app startup", "error",
                         f"app did not become ready on port {port} within {d.get('startup_timeout', 60)}s "
                         f"(tried {', '.join(candidates)}; see logs/app-logs.log)")

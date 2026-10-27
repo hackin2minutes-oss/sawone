@@ -500,3 +500,4 @@ AR.update({
         "بعد الإصدار: تتبّع الثغرات، وإعادة فحص يومية للصور العاملة فعلياً (sawone-monitor.yml).",
 })
 AR.update({"check failed": "فشل الفحص"})
+AR.update({"A product section could not be rendered: {e}": "تعذر عرض قسم المنتج: {e}"})

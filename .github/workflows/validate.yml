@@ -79,6 +79,7 @@ jobs:
       dast-full-scan: false # keep the self-test short
       enable-cicd: false # the fixtures have no workflows of their own
       pr-gate: all # the fixtures' flaws also exist on main; the assertions need them to fail here too
+      incremental: "off"
 
   consumer-terraform:
     name: consumer terraform-aws
@@ -97,6 +98,7 @@ jobs:
       upload-sarif: never
       enable-cicd: false
       pr-gate: all
+      incremental: "off"
 
   # Phase selection: plan and code only (no image build, no attacks), as a quick pull-request check would run.
   consumer-phases:
@@ -115,6 +117,7 @@ jobs:
       enforce: false
       upload-sarif: never
       pr-gate: all
+      incremental: "off"
 
   # The same Terraform flaws, all accepted in .sawone-baseline.yml: the IaC gate must pass and say so.
   consumer-baselined:
@@ -133,6 +136,7 @@ jobs:
       upload-sarif: never
       enable-cicd: false
       pr-gate: all
+      incremental: "off"
 
   # Full release path, only on pushes to main: publish the scanned fixture image to a dedicated
   # self-test package, sign it, attest its SBOM, generate SLSA provenance, and run a no-op deploy
