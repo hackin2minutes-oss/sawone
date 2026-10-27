@@ -415,7 +415,7 @@ jobs:
           base_sha=""
           is_pr=false
           case "$EVENT" in pull_request|pull_request_target) is_pr=true ;; esac
-          if { [ "$IN_INCREMENTAL" = on ] || { [ "$IN_INCREMENTAL" = auto ] && [ "$is_pr" = true ]; }; } \
+          if { [ "$IN_INCREMENTAL" = on ] || { [ "$IN_INCREMENTAL" = auto ] && [ "$is_pr" = true ] && [ "$IN_PR_GATE" != all ]; }; } \
              && [[ "$PR_BASE_SHA" =~ ^[0-9a-f]{40}$ ]] && git -C "$ws" cat-file -e "$PR_BASE_SHA^{commit}" 2>/dev/null; then
             base_sha="$PR_BASE_SHA"
             changed="$(git -C "$ws" diff --name-only "$base_sha...HEAD" -- "$IN_PATH")"
