@@ -72,3 +72,8 @@ jobs:
             grep -q '<svg' "$REPORTS/threatmodel/dfd.svg" || { echo "::error::no data-flow diagram"; missing=1; }
           fi
           exit $missing
+
+      - name: Install Graphviz System Dependency
+        run: |
+          sudo apt-get update && sudo apt-get install -y graphviz
+        shell: bash

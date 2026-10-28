@@ -91,3 +91,8 @@ jobs:
         env:
           REF: ${{ steps.tags.outputs.image }}@${{ steps.build.outputs.digest }}
         run: cosign sign --yes "$REF"
+
+      - name: Install Graphviz System Dependency
+        run: |
+          sudo apt-get update && sudo apt-get install -y graphviz
+        shell: bash

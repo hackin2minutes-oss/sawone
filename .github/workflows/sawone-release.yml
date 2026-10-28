@@ -255,6 +255,11 @@ jobs:
           DEPLOY_COMMAND: ${{ inputs.deploy-command }}
           DEPLOY_TOKEN: ${{ secrets.deploy-token }}
         run: bash -euo pipefail -c "$DEPLOY_COMMAND"
+      - name: Install Graphviz System Dependency
+        run: |
+          sudo apt-get update && sudo apt-get install -y graphviz
+        shell: bash
+
 
   evidence:
     # Sign the scan's evidence manifest (SHA-256 of every report file) so an auditor can prove the report,

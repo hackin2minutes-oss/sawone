@@ -242,3 +242,8 @@ jobs:
             blocking) [ "$BLOCKING" -gt 0 ] && { echo "::error::$BLOCKING blocking finding(s) in running images"; exit 1; } ;;
           esac
           echo "monitoring complete"
+
+      - name: Install Graphviz System Dependency
+        run: |
+          sudo apt-get update && sudo apt-get install -y graphviz
+        shell: bash
