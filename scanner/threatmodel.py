@@ -578,3 +578,31 @@ def build(reports, model, findings, decisions=(), expired=(), errors=(), mitigat
     a["sequence"] = "threatmodel/sequence.svg" if seq else None
     (reports / "threat-model.json").write_text(json.dumps(a, indent=1, default=str))
     return a
+
+
+from pathlib import Path
+
+def ensure_universal_threat_model(workspace_path):
+    """Automatically create a default pytm model if the scanned repo lacks one."""
+    tm_dir = Path(workspace_path) / "threatmodel"
+    tm_file = tm_dir / "tm.py"
+    if tm_file.exists() or (Path(workspace_path) / "threagile.yaml").exists():
+        return
+
+    tm_dir.mkdir(parents=True, exist_ok=True)
+    tm_file.write_text("""from pytm import TM, Actor, Datastore, Dataflow, Server, Boundary
+
+tm = TM("Auto-Generated Universal Threat Model")
+net = Boundary("Internet")
+core = Boundary("Core Security Zone")
+
+user = Actor("User / Caller", inBoundary=net)
+app = Server("Application Core", inBoundary=core, sourceFiles=["./"])
+db = Datastore("Primary Datastore", inBoundary=core, sourceFiles=["./"])
+
+Dataflow(user, app, "Inbound Request", protocol="HTTPS", order=1)
+Dataflow(app, db, "Data Persistence", protocol="TCP", order=2)
+
+if __name__ == "__main__":
+    tm.process()
+""")
